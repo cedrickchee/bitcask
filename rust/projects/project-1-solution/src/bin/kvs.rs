@@ -1,3 +1,4 @@
+use std::process::exit;
 use structopt::StructOpt;
 
 mod cli;
@@ -7,17 +8,17 @@ fn main() {
     let opts = Options::from_args();
 
     match opts.cmd {
-        SubCommand::Get { key } => {
-            println!("get - key: {}", key);
-            panic!("unimplemented")
+        SubCommand::Get { .. } => {
+            eprintln!("unimplemented");
+            exit(1);
         }
-        SubCommand::Set { key, value } => {
-            println!("set - key: {}, value: {}", key, value);
-            panic!("unimplemented")
+        SubCommand::Set { .. } => {
+            eprintln!("unimplemented");
+            exit(1);
         }
-        SubCommand::Rm { key } => {
-            println!("remove - key: {}", key);
-            panic!("unimplemented")
+        SubCommand::Rm { .. } => {
+            eprintln!("unimplemented");
+            exit(1);
         }
     }
 }
