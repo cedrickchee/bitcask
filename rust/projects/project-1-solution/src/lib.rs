@@ -1,6 +1,6 @@
 //! # Kvs
 //!
-//! An in-memory key/value store module
+//! A simple in-memory key/value store
 
 #![deny(missing_docs)]
 

@@ -1,14 +1,27 @@
 use std::collections::HashMap;
 
-/// A key-value store of String keys and values.
+/// The `KvStore` stores string key/value pairs.
+///
+/// Key/value pairs are stored in a `HashMap` in memory and not persisted to disk.
+///
+/// Example:
+///
+/// ```rust
+/// # use kvs::KvStore;
+/// let mut store = KvStore::new();
+/// store.set(String::from("my_key"), String::from("my_value"));
+///
+/// let val = store.get(String::from("my_key"));
+/// assert_eq!(val, Some(String::from("my_value")));
+/// ```
 pub struct KvStore {
     storage: HashMap<String, String>,
 }
 
 impl KvStore {
-    /// Constructs a new `KvStore`.
+    /// Creates a new `KvStore`.
     ///
-    /// # Examples
+    /// # Example
     ///
     /// ```
     /// use kvs::KvStore;
@@ -23,7 +36,9 @@ impl KvStore {
 
     /// Set a given key and value Strings in the store.
     ///
-    /// # Examples
+    /// If the key already exists, the previous value will be overwritten.
+    ///
+    /// # Example
     ///
     /// ```
     /// use kvs::KvStore;
@@ -37,7 +52,9 @@ impl KvStore {
 
     /// Get a value from the store using a key String.
     ///
-    /// # Examples
+    /// Returns `None` if the given key does not exist.
+    ///
+    /// # Example
     ///
     /// ```
     /// use kvs::KvStore;
@@ -57,7 +74,7 @@ impl KvStore {
 
     /// Remove a given key from the store.
     ///
-    /// # Examples
+    /// # Example
     ///
     /// ```
     /// use kvs::KvStore;
