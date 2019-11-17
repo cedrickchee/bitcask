@@ -1,20 +1,23 @@
-#[macro_use]
-extern crate clap;
-use clap::App;
+use structopt::StructOpt;
+
+mod cli;
+use cli::{Options, SubCommand};
 
 fn main() {
-    let yaml = load_yaml!("cli.yaml");
-    let matches = App::from_yaml(yaml)
-        .version(env!("CARGO_PKG_VERSION"))
-        .author(env!("CARGO_PKG_AUTHORS"))
-        .about(env!("CARGO_PKG_DESCRIPTION"))
-        .get_matches();
+    let opts = Options::from_args();
 
-    match matches.subcommand_name() {
-        Some("get") => panic!("unimplemented"),
-        Some("set") => panic!("unimplemented"),
-        Some("rm") => panic!("unimplemented"),
-        None => panic!("No subcommand was used"),
-        _ => panic!("Some other subcommand was used"),
+    match opts.cmd {
+        SubCommand::Get { key } => {
+            println!("get - key: {}", key);
+            panic!("unimplemented")
+        }
+        SubCommand::Set { key, value } => {
+            println!("set - key: {}, value: {}", key, value);
+            panic!("unimplemented")
+        }
+        SubCommand::Rm { key } => {
+            println!("remove - key: {}", key);
+            panic!("unimplemented")
+        }
     }
 }
