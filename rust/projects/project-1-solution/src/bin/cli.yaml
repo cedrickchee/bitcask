@@ -1,7 +1,4 @@
 name: kvs
-version: "0.1.0"
-author: Cedric Chee <cedric@invictusbyte.com>
-about: Key-value store
 subcommands:
   - get:
       about: Get the string value of a given string key
