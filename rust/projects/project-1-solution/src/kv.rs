@@ -66,10 +66,7 @@ impl KvStore {
     /// }
     /// ```
     pub fn get(&self, key: String) -> Option<String> {
-        match self.storage.get(&key) {
-            Some(value) => Some(value.clone()),
-            None => None,
-        }
+        self.storage.get(&key).cloned()
     }
 
     /// Remove a given key from the store.
