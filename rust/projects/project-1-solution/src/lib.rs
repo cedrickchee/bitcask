@@ -2,7 +2,7 @@
 //!
 //! An in-memory key/value store module
 
-#[deny(missing_docs)]
+#![deny(missing_docs)]
 use std::collections::HashMap;
 
 /// A key-value store of String keys and values.
