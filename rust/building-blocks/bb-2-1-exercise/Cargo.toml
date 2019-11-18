@@ -1,0 +1,22 @@
+[package]
+name = "bb-2-1-exercise"
+version = "0.1.0"
+authors = ["cedrickchee <cedrick.chee@gmail.com>"]
+edition = "2018"
+repository = "https://github.com/cedrickchee/practical-rust"
+description = "Building Blocks 2 (serialize/deserialize JSON) exercise for PingCap's Practical Networked Applications in Rust course"
+license = "MIT"
+readme = "README.md"
+keywords = ["rust", "distributed-systems", "networked-app", "project", "educational"]
+categories = ["command-line-utilities", "database-implementations"]
+
+[dependencies]
+# The core APIs, including the Serialize and Deserialize traits. Always
+# required when using Serde. The "derive" feature is only required when
+# using #[derive(Serialize, Deserialize)] to make Serde work with structs
+# and enums defined in your crate.
+serde = {version = "1.0.102", features = ["derive"]}
+
+# Each data format lives in its own crate; the sample code below uses JSON
+# but you may be using a different one.
+serde_json = "1.0.41"
