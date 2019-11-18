@@ -1,10 +1,11 @@
+use kvs::Result;
 use std::process::exit;
 use structopt::StructOpt;
 
 mod cli;
 use cli::{Options, SubCommand};
 
-fn main() {
+fn main() -> Result<()> {
     let opts = Options::from_args();
 
     match opts.cmd {

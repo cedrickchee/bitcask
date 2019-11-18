@@ -1,5 +1,5 @@
+use crate::Result;
 use std::collections::HashMap;
-use std::io::Result;
 use std::path::Path;
 
 /// The `KvStore` stores string key/value pairs.
