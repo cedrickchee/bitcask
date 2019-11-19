@@ -10,7 +10,7 @@ fn main() -> Result<()> {
 
     match opts.cmd {
         SubCommand::Get { key } => {
-            let store = KvStore::open(current_dir()?)?;
+            let mut store = KvStore::open(current_dir()?)?;
 
             let output = match store.get(key)? {
                 Some(value) => value,
