@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs::{create_dir_all, File, OpenOptions};
-use std::io::{BufReader, BufWriter};
+use std::io::{BufReader, BufWriter, Write};
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -42,8 +42,7 @@ impl KvStore {
         let path = path.into();
         create_dir_all(&path)?;
 
-        let mut log_path = path.clone();
-        log_path.push("kvs.log");
+        let log_path = path.join("kvs.log");
         let log = OpenOptions::new()
             .create(true)
             .read(true)
@@ -77,6 +76,7 @@ impl KvStore {
     pub fn set(&mut self, key: String, value: String) -> Result<()> {
         let command = Command::new(CommandType::Set, key.to_owned(), value.to_owned());
         serde_json::to_writer(&mut self.writer, &command)?;
+        self.writer.flush()?;
         self.map.insert(key, value);
         Ok(())
     }
