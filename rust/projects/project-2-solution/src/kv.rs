@@ -1,5 +1,5 @@
 use std::cmp;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::mem;
@@ -123,13 +123,12 @@ impl KvStore {
                 .open(&tmp_log_path)?,
         );
 
-        // Sort index by log offset to reduce seeks. This requires a copy of the index.
-        let mut pos_vec: Vec<_> = self.kv_log.index.iter().collect();
-        pos_vec.sort_unstable_by_key(|(_, cmd_pos)| cmd_pos.pos);
+        // Compact the log by key order.
+        // Mostly read sequentially; with a sorted index like a b-tree,
+        // there would be no copying of the index.
         let mut new_pos = 0; // pos in the new log file
-                             // index map for the new log file
-        let mut new_index = HashMap::new();
-        for (key, cmd_pos) in pos_vec {
+        let mut new_index = BTreeMap::new(); // index map for the new log file
+        for (key, cmd_pos) in &self.kv_log.index {
             if self.kv_log.reader.pos != cmd_pos.pos {
                 self.kv_log.reader.seek(SeekFrom::Start(cmd_pos.pos))?;
             }
@@ -173,7 +172,7 @@ struct KvLog {
     /// Reader of the log
     reader: BufReaderWithPos<File>,
     /// Stores keys and the pos of the last command
-    index: HashMap<String, CommandPos>,
+    index: BTreeMap<String, CommandPos>,
     uncompacted: u64,
 }
 
@@ -181,14 +180,9 @@ impl KvLog {
     // Pay attention that it does not load the log file automatically
     fn open(path: impl Into<PathBuf>) -> Result<Self> {
         let path = path.into();
-        let mut writer = BufWriterWithPos::new(
-            OpenOptions::new()
-                .create(true)
-                .read(true)
-                .append(true)
-                .open(&path)?,
-        )?;
-        // Set pos to end of file
+        let mut writer =
+            BufWriterWithPos::new(OpenOptions::new().create(true).append(true).open(&path)?)?;
+        // Because file mode is set to append, we need to set pos to end of file manually to keep synced
         writer.seek(SeekFrom::End(0))?;
 
         let reader = BufReaderWithPos::new(File::open(&path)?)?;
@@ -197,7 +191,7 @@ impl KvLog {
             path,
             reader,
             writer,
-            index: HashMap::new(),
+            index: BTreeMap::new(),
             uncompacted: 0,
         })
     }
