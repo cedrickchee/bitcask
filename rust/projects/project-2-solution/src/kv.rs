@@ -11,16 +11,17 @@ use crate::Result;
 
 /// The `KvStore` stores string key/value pairs.
 ///
-/// Key/value pairs are stored in a `HashMap` in memory and not persisted to disk.
+/// Key/value pairs are stored in a `HashMap` in memory and also persisted to disk using a WAL.
 ///
 /// Example:
 ///
 /// ```rust
-/// # use kvs::KvStore;
-/// let mut store = KvStore::new();
-/// store.set(String::from("my_key"), String::from("my_value"));
+/// use std::env::current_dir;
+/// use kvs::KvStore;
+/// let mut store = KvStore::open(current_dir().unwrap()).unwrap();
+/// store.set(String::from("my_key"), String::from("my_value")).unwrap();
 ///
-/// let val = store.get(String::from("my_key"));
+/// let val = store.get(String::from("my_key")).unwrap();
 /// assert_eq!(val, Some(String::from("my_value")));
 /// ```
 pub struct KvStore {
@@ -33,6 +34,10 @@ pub struct KvStore {
 
 impl KvStore {
     /// Opens the store with the given path.
+    ///
+    /// # Error
+    ///
+    /// It propagates I/O or deserialization errors during the WAL replay.
     pub fn open(path: impl Into<PathBuf>) -> Result<Self> {
         let path = path.into();
         create_dir_all(&path)?;
@@ -56,13 +61,18 @@ impl KvStore {
     ///
     /// If the key already exists, the previous value will be overwritten.
     ///
+    /// # Error
+    ///
+    /// It propagates I/O or serialization errors during writing the WAL.
+    ///
     /// # Example
     ///
     /// ```
+    /// use std::env::current_dir;
     /// use kvs::KvStore;
     ///
-    /// let mut store = KvStore::new();
-    /// store.set(String::from("my_key"), String::from("my_value"));
+    /// let mut store = KvStore::open(current_dir().unwrap()).unwrap();
+    /// store.set(String::from("my_key"), String::from("my_value")).unwrap();
     /// ```
     pub fn set(&mut self, key: String, value: String) -> Result<()> {
         let command = Command::new(CommandType::Set, key.to_owned(), value.to_owned());
@@ -78,10 +88,11 @@ impl KvStore {
     /// # Example
     ///
     /// ```
+    /// use std::env::current_dir;
     /// use kvs::KvStore;
     ///
-    /// let store = KvStore::new();
-    /// match store.get(String::from("my_key")) {
+    /// let store = KvStore::open(current_dir().unwrap()).unwrap();
+    /// match store.get(String::from("my_key")).unwrap() {
     ///     Some(value) => println!("Value: {}", value),
     ///     None => println!("Key not found"),
     /// }
@@ -95,10 +106,11 @@ impl KvStore {
     /// # Example
     ///
     /// ```
+    /// use std::env::current_dir;
     /// use kvs::KvStore;
     ///
-    /// let mut store = KvStore::new();
-    /// store.remove(String::from("my_key"));
+    /// let mut store = KvStore::open(current_dir().unwrap()).unwrap();
+    /// store.remove(String::from("my_key")).unwrap();
     /// ```
     pub fn remove(&mut self, key: String) -> Result<Option<String>> {
         let command = Command::new(CommandType::Remove, key.to_owned(), "".to_string());
