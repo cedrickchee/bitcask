@@ -111,6 +111,7 @@ impl KvStore {
         self.kv_log.remove(key)
     }
 
+    /// Save space by clearing stale entries in the log.
     fn compact(&mut self) -> Result<()> {
         // The new log file for merged entries
         let tmp_log_path = self.path.join("kvs.log.new");
@@ -122,7 +123,7 @@ impl KvStore {
                 .open(&tmp_log_path)?,
         );
 
-        // Copy content in order to reduce seeks
+        // Sort index by log offset to reduce seeks. This requires a copy of the index.
         let mut pos_vec: Vec<_> = self.kv_log.index.iter().collect();
         pos_vec.sort_unstable_by_key(|(_, cmd_pos)| cmd_pos.pos);
         let mut new_pos = 0; // pos in the new log file
@@ -138,6 +139,10 @@ impl KvStore {
             new_index.insert(key.clone(), (new_pos..new_pos + len).into());
             new_pos += len;
         }
+        // Explicit flush and close before dropping the writer. We would not rely the destructor
+        // to do it, particularly in a case where data must not be lost.
+        new_writer.flush()?;
+
         drop(new_writer);
 
         // As all entries are written to the log, we can safely rename it to a valid log file name
@@ -153,6 +158,7 @@ impl KvStore {
 
         // Close old log file before removing it. (It's a must on Windows I think)
         let old_path = kv_log.path.clone();
+        // The old file is useless. It's safe we just drop it.
         drop(kv_log);
         fs::remove_file(old_path)?;
 
