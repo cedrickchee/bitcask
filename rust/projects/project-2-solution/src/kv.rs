@@ -230,15 +230,20 @@ impl KvLog {
     }
 
     pub fn remove(&mut self, key: String) -> Result<()> {
-        let command = Command::remove(key);
-        serde_json::to_writer(&mut self.writer, &command)?;
-        self.writer.flush()?;
+        if self.index.contains_key(&key) {
+            let command = Command::remove(key);
+            serde_json::to_writer(&mut self.writer, &command)?;
+            self.writer.flush()?;
 
-        if let Command::Remove { key } = command {
-            self.index.remove(&key);
+            if let Command::Remove { key } = command {
+                let old_cmd = self.index.remove(&key).expect("key not found");
+                self.uncompacted += old_cmd.len;
+            }
+
+            Ok(())
+        } else {
+            Err(KvsError::KeyNotFound)
         }
-
-        Ok(())
     }
 
     /// Load from the log file.
@@ -254,7 +259,11 @@ impl KvLog {
                     }
                 }
                 Command::Remove { key } => {
-                    self.index.remove(&key);
+                    if let Some(old_cmd) = self.index.remove(&key) {
+                        self.uncompacted += old_cmd.len;
+                    }
+
+                    self.uncompacted += new_pos - pos;
                 }
             }
 

@@ -1,6 +1,8 @@
-use kvs::{KvStore, Result};
 use std::env::current_dir;
+use std::process::exit;
 use structopt::StructOpt;
+
+use kvs::{KvStore, KvsError, Result};
 
 mod cli;
 use cli::{Options, SubCommand};
@@ -25,7 +27,14 @@ fn main() -> Result<()> {
         }
         SubCommand::Rm { key } => {
             let mut store = KvStore::open(current_dir()?)?;
-            store.remove(key)?;
+            match store.remove(key) {
+                Ok(()) => {}
+                Err(KvsError::KeyNotFound) => {
+                    println!("Key not found");
+                    exit(1);
+                }
+                Err(e) => return Err(e),
+            }
         }
     }
     Ok(())
