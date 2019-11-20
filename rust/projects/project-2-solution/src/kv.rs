@@ -178,6 +178,8 @@ struct KvLog {
     reader: BufReaderWithPos<File>,
     /// Stores keys and the pos of the last command
     index: BTreeMap<String, CommandPos>,
+    /// The number of bytes representing "stale" commands
+    /// that could be deleted during a compaction.
     uncompacted: u64,
 }
 
@@ -263,6 +265,8 @@ impl KvLog {
                         self.uncompacted += old_cmd.len;
                     }
 
+                    // The "remove" command itself can be deleted in the next compaction so we add
+                    // its length to `uncompacted`.
                     self.uncompacted += new_pos - pos;
                 }
             }
