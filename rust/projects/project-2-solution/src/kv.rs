@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::Deserializer;
 
-use crate::Result;
+use crate::{KvsError, Result};
 
 const COMPACTION_THRESHOLD: u64 = 1024;
 
@@ -202,13 +202,16 @@ impl KvLog {
     }
 
     pub fn set(&mut self, key: String, value: String) -> Result<()> {
-        let command = Command::new(CommandType::Set, key.to_owned(), value.to_owned());
+        let command = Command::set(key, value);
         let pos = self.writer.pos;
         serde_json::to_writer(&mut self.writer, &command)?;
         self.writer.flush()?;
-        if let Some(old_cmd) = self.index.insert(key, (pos..self.writer.pos).into()) {
-            self.uncompacted += old_cmd.len;
+        if let Command::Set { key, .. } = command {
+            if let Some(old_cmd) = self.index.insert(key, (pos..self.writer.pos).into()) {
+                self.uncompacted += old_cmd.len;
+            }
         }
+
         Ok(())
     }
 
@@ -216,19 +219,24 @@ impl KvLog {
         if let Some(cmd_pos) = self.index.get(&key) {
             self.reader.seek(SeekFrom::Start(cmd_pos.pos))?;
             let cmd_reader = (&mut self.reader).take(cmd_pos.len);
-            let cmd: Command = serde_json::from_reader(cmd_reader)?;
-            Ok(Some(cmd.value))
+            if let Command::Set { value, .. } = serde_json::from_reader(cmd_reader)? {
+                Ok(Some(value))
+            } else {
+                Err(KvsError::UnexpectedCommandType)
+            }
         } else {
             Ok(None)
         }
     }
 
     pub fn remove(&mut self, key: String) -> Result<()> {
-        let command = Command::new(CommandType::Remove, key.to_owned(), "".to_string());
+        let command = Command::remove(key);
         serde_json::to_writer(&mut self.writer, &command)?;
         self.writer.flush()?;
 
-        self.index.remove(&key);
+        if let Command::Remove { key } = command {
+            self.index.remove(&key);
+        }
 
         Ok(())
     }
@@ -240,22 +248,12 @@ impl KvLog {
         while let Some(cmd) = stream.next() {
             let new_pos = stream.byte_offset() as u64;
             match cmd? {
-                Command {
-                    cmd: CommandType::Set,
-                    key,
-                    value,
-                } => {
-                    let _val = value; // FIXME: field value is not applicable for remove command
+                Command::Set { key, .. } => {
                     if let Some(old_cmd) = self.index.insert(key, (pos..new_pos).into()) {
                         self.uncompacted += old_cmd.len;
                     }
                 }
-                Command {
-                    cmd: CommandType::Remove,
-                    key,
-                    value,
-                } => {
-                    let _val = value; // FIXME: field value is not applicable for remove command
+                Command::Remove { key } => {
                     self.index.remove(&key);
                 }
             }
@@ -267,23 +265,20 @@ impl KvLog {
     }
 }
 
+/// Enum representing a command
 #[derive(Serialize, Deserialize, Debug)]
-enum CommandType {
-    Set,
-    Remove,
-}
-
-/// Struct representing a command
-#[derive(Serialize, Deserialize, Debug)]
-struct Command {
-    cmd: CommandType,
-    key: String,
-    value: String,
+enum Command {
+    Set { key: String, value: String },
+    Remove { key: String },
 }
 
 impl Command {
-    fn new(cmd: CommandType, key: String, value: String) -> Command {
-        Self { cmd, key, value }
+    fn set(key: String, value: String) -> Command {
+        Command::Set { key, value }
+    }
+
+    fn remove(key: String) -> Command {
+        Command::Remove { key }
     }
 }
 
