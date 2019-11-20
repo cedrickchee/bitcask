@@ -1,7 +1,7 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
-use std::mem;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
@@ -14,8 +14,10 @@ const COMPACTION_THRESHOLD: u64 = 1024;
 
 /// The `KvStore` stores string key/value pairs.
 ///
-/// Key/value pairs are stored in a `HashMap` in memory for fast query
-/// and also persisted to disk in a log.
+/// Key/value pairs are stored in memory and also persisted to disk in a log.
+/// Log files are named after monotonically increasing generation numbers with
+/// a `log` extension name. Index as a `BTreeMap` in memory stores the keys and
+/// the value positions for fast query.
 ///
 /// Example:
 ///
@@ -31,27 +33,55 @@ const COMPACTION_THRESHOLD: u64 = 1024;
 pub struct KvStore {
     /// Directory the log and other data
     path: PathBuf,
-    kv_log: KvLog,
-    log_gen: u64,
+    /// Writer of the current log
+    writer: BufWriterWithPos<File>,
+    /// Map generation number to the file reader
+    readers: HashMap<u64, BufReaderWithPos<File>>,
+    /// Stores keys and the pos of the last command
+    index: BTreeMap<String, CommandPos>,
+    /// The number of bytes representing "stale" commands
+    /// that could be deleted during a compaction.
+    uncompacted: u64,
+    /// Current generation number
+    current_gen: u64,
 }
 
 impl KvStore {
     /// Opens the store with the given path.
     ///
-    /// # Error
+    /// # Errors
     ///
     /// It propagates I/O or deserialization errors during the log replay.
     pub fn open(path: impl Into<PathBuf>) -> Result<Self> {
         let path = path.into();
         fs::create_dir_all(&path)?;
-        let log_gen = latest_gen(&path)?;
-        let mut kv_log = KvLog::open(path.join(format!("{}.log", log_gen)))?;
-        kv_log.load()?;
+
+        // A list of log file names. The file names looks like a sequence of generated numbers.
+        let gen_list = sorted_gen_list(&path)?;
+        let mut uncompacted = 0;
+
+        // Initialized index and log readers.
+        let mut index = BTreeMap::new();
+        let mut readers = HashMap::new(); // one reader for one log file
+
+        // Loop over multiple log files if any in a directory
+        for &gen in &gen_list {
+            let mut reader = BufReaderWithPos::new(File::open(log_path(&path, gen))?)?;
+            uncompacted += load(gen, &mut reader, &mut index)?;
+            readers.insert(gen, reader);
+        }
+
+        // Increment log file name from the last generated number and create new log file with it.
+        let current_gen = gen_list.last().unwrap_or(&0) + 1;
+        let writer = new_log_file(&path, current_gen, &mut readers)?;
 
         Ok(Self {
             path,
-            kv_log,
-            log_gen,
+            readers,
+            writer,
+            index,
+            uncompacted,
+            current_gen,
         })
     }
 
@@ -59,7 +89,7 @@ impl KvStore {
     ///
     /// If the key already exists, the previous value will be overwritten.
     ///
-    /// # Error
+    /// # Errors
     ///
     /// It propagates I/O or serialization errors during writing the log.
     ///
@@ -73,10 +103,26 @@ impl KvStore {
     /// store.set(String::from("my_key"), String::from("my_value")).unwrap();
     /// ```
     pub fn set(&mut self, key: String, value: String) -> Result<()> {
-        self.kv_log.set(key, value)?;
-        if self.kv_log.uncompacted > COMPACTION_THRESHOLD {
+        // self.kv_log.set(key, value)?;
+
+        let command = Command::set(key, value);
+        let pos = self.writer.pos;
+        serde_json::to_writer(&mut self.writer, &command)?;
+        self.writer.flush()?;
+        if let Command::Set { key, .. } = command {
+            // Storing log pointers in the index. Log pointers is of type CommandPos.
+            if let Some(old_cmd) = self
+                .index
+                .insert(key, (self.current_gen, pos..self.writer.pos).into())
+            {
+                self.uncompacted += old_cmd.len;
+            }
+        }
+
+        if self.uncompacted > COMPACTION_THRESHOLD {
             self.compact()?;
         }
+
         Ok(())
     }
 
@@ -97,7 +143,22 @@ impl KvStore {
     /// }
     /// ```
     pub fn get(&mut self, key: String) -> Result<Option<String>> {
-        self.kv_log.get(key)
+        if let Some(cmd_pos) = self.index.get(&key) {
+            let reader = self
+                .readers
+                .get_mut(&cmd_pos.gen)
+                .expect("Cannot find log reader");
+            reader.seek(SeekFrom::Start(cmd_pos.pos))?;
+
+            let cmd_reader = reader.take(cmd_pos.len);
+            if let Command::Set { value, .. } = serde_json::from_reader(cmd_reader)? {
+                Ok(Some(value))
+            } else {
+                Err(KvsError::UnexpectedCommandType)
+            }
+        } else {
+            Ok(None)
+        }
     }
 
     /// Remove a given key from the store.
@@ -111,126 +172,6 @@ impl KvStore {
     /// let mut store = KvStore::open(current_dir().unwrap()).unwrap();
     /// store.remove(String::from("my_key")).unwrap();
     /// ```
-    pub fn remove(&mut self, key: String) -> Result<()> {
-        self.kv_log.remove(key)
-    }
-
-    /// Save space by clearing stale entries in the log.
-    fn compact(&mut self) -> Result<()> {
-        // The new log file for merged entries
-        let tmp_log_path = self.path.join("kvs.log.new");
-        let mut new_writer = BufWriter::new(
-            OpenOptions::new()
-                .create(true)
-                .truncate(true)
-                .write(true)
-                .open(&tmp_log_path)?,
-        );
-
-        // Compact the log by key order.
-        // Mostly read sequentially; with a sorted index like a b-tree,
-        // there would be no copying of the index.
-        let mut new_pos = 0; // pos in the new log file
-        let mut new_index = BTreeMap::new(); // index map for the new log file
-        for (key, cmd_pos) in &self.kv_log.index {
-            if self.kv_log.reader.pos != cmd_pos.pos {
-                self.kv_log.reader.seek(SeekFrom::Start(cmd_pos.pos))?;
-            }
-
-            let mut entry_reader = (&mut self.kv_log.reader).take(cmd_pos.len);
-            let len = io::copy(&mut entry_reader, &mut new_writer)?;
-            new_index.insert(key.clone(), (new_pos..new_pos + len).into());
-            new_pos += len;
-        }
-        // Explicit flush and close before dropping the writer. We would not rely the destructor
-        // to do it, particularly in a case where data must not be lost.
-        new_writer.flush()?;
-
-        drop(new_writer);
-
-        // As all entries are written to the log, we can safely rename it to a valid log file name
-        let log_path = self.path.join(format!("{}.log", self.log_gen + 1));
-        fs::rename(tmp_log_path, &log_path)?;
-        self.log_gen += 1;
-
-        // Reopen using the new file name
-        let mut kv_log = KvLog::open(&log_path)?;
-        // Use the index map built on writing instead of reloading the log file
-        kv_log.index = new_index;
-        // Update the KvLog we are using
-        mem::swap(&mut self.kv_log, &mut kv_log);
-
-        // Close old log file before removing it. (It's a must on Windows I think)
-        let old_path = kv_log.path.clone();
-        // The old file is useless. It's safe we just drop it.
-        drop(kv_log);
-        fs::remove_file(old_path)?;
-
-        Ok(())
-    }
-}
-
-struct KvLog {
-    path: PathBuf,
-    /// Writer of the log
-    writer: BufWriterWithPos<File>,
-    /// Reader of the log
-    reader: BufReaderWithPos<File>,
-    /// Stores keys and the pos of the last command
-    index: BTreeMap<String, CommandPos>,
-    /// The number of bytes representing "stale" commands
-    /// that could be deleted during a compaction.
-    uncompacted: u64,
-}
-
-impl KvLog {
-    // Pay attention that it does not load the log file automatically
-    fn open(path: impl Into<PathBuf>) -> Result<Self> {
-        let path = path.into();
-        let mut writer =
-            BufWriterWithPos::new(OpenOptions::new().create(true).append(true).open(&path)?)?;
-        // Because file mode is set to append, we need to set pos to end of file manually to keep synced
-        writer.seek(SeekFrom::End(0))?;
-
-        let reader = BufReaderWithPos::new(File::open(&path)?)?;
-
-        Ok(Self {
-            path,
-            reader,
-            writer,
-            index: BTreeMap::new(),
-            uncompacted: 0,
-        })
-    }
-
-    pub fn set(&mut self, key: String, value: String) -> Result<()> {
-        let command = Command::set(key, value);
-        let pos = self.writer.pos;
-        serde_json::to_writer(&mut self.writer, &command)?;
-        self.writer.flush()?;
-        if let Command::Set { key, .. } = command {
-            if let Some(old_cmd) = self.index.insert(key, (pos..self.writer.pos).into()) {
-                self.uncompacted += old_cmd.len;
-            }
-        }
-
-        Ok(())
-    }
-
-    pub fn get(&mut self, key: String) -> Result<Option<String>> {
-        if let Some(cmd_pos) = self.index.get(&key) {
-            self.reader.seek(SeekFrom::Start(cmd_pos.pos))?;
-            let cmd_reader = (&mut self.reader).take(cmd_pos.len);
-            if let Command::Set { value, .. } = serde_json::from_reader(cmd_reader)? {
-                Ok(Some(value))
-            } else {
-                Err(KvsError::UnexpectedCommandType)
-            }
-        } else {
-            Ok(None)
-        }
-    }
-
     pub fn remove(&mut self, key: String) -> Result<()> {
         if self.index.contains_key(&key) {
             let command = Command::remove(key);
@@ -248,33 +189,59 @@ impl KvLog {
         }
     }
 
-    /// Load from the log file.
-    fn load(&mut self) -> Result<()> {
-        let mut pos = self.reader.seek(SeekFrom::Start(0))?;
-        let mut stream = Deserializer::from_reader(&mut self.reader).into_iter::<Command>();
-        while let Some(cmd) = stream.next() {
-            let new_pos = stream.byte_offset() as u64;
-            match cmd? {
-                Command::Set { key, .. } => {
-                    if let Some(old_cmd) = self.index.insert(key, (pos..new_pos).into()) {
-                        self.uncompacted += old_cmd.len;
-                    }
-                }
-                Command::Remove { key } => {
-                    if let Some(old_cmd) = self.index.remove(&key) {
-                        self.uncompacted += old_cmd.len;
-                    }
+    /// Save space by clearing stale entries in the log.
+    fn compact(&mut self) -> Result<()> {
+        // Increase current gen number by 2. current_gen + 1 is for the compaction file.
+        let compaction_gen = self.current_gen + 1;
+        self.current_gen += 2;
 
-                    // The "remove" command itself can be deleted in the next compaction so we add
-                    // its length to `uncompacted`.
-                    self.uncompacted += new_pos - pos;
-                }
+        self.writer = self.new_log_file(self.current_gen)?;
+
+        let mut compaction_writer = self.new_log_file(compaction_gen)?;
+
+        // Compact the log by key order.
+        // Mostly read sequentially; with a sorted index like a b-tree,
+        // there would be no copying of the index.
+        let mut new_pos = 0; // pos in the new log file
+        for cmd_pos in &mut self.index.values_mut() {
+            let reader = self
+                .readers
+                .get_mut(&cmd_pos.gen)
+                .expect("Cannot find log reader");
+            if reader.pos != cmd_pos.pos {
+                reader.seek(SeekFrom::Start(cmd_pos.pos))?;
             }
 
-            pos = new_pos;
+            let mut entry_reader = reader.take(cmd_pos.len);
+            let len = io::copy(&mut entry_reader, &mut compaction_writer)?;
+            *cmd_pos = (compaction_gen, new_pos..new_pos + len).into();
+            new_pos += len;
+        }
+
+        // Explicit flush and close before dropping the writer. We would not rely the destructor
+        // to do it, particularly in a case where data must not be lost.
+        compaction_writer.flush()?;
+
+        // Remove stale log files
+        let stale_gens: Vec<_> = self
+            .readers
+            .keys()
+            .filter(|&&gen| gen < compaction_gen)
+            .cloned()
+            .collect();
+        for stale_gen in stale_gens {
+            self.readers.remove(&stale_gen);
+            fs::remove_file(log_path(&self.path, stale_gen))?;
         }
 
         Ok(())
+    }
+
+    /// Create a new log file with given generation number and add the reader to the readers map.
+    ///
+    /// Returns the writer to the log.
+    fn new_log_file(&mut self, gen: u64) -> Result<BufWriterWithPos<File>> {
+        new_log_file(&self.path, gen, &mut self.readers)
     }
 }
 
@@ -295,15 +262,21 @@ impl Command {
     }
 }
 
-/// Represents the position and length of a JSON-serialized command in the log.
+/// Represents the JSON-serialized command in the log.
 struct CommandPos {
+    /// Log files are named after a generation number.
+    /// `gen` gives us the log filename the command was stored.
+    gen: u64,
+    /// Position.
     pos: u64,
+    /// Length.
     len: u64,
 }
 
-impl From<Range<u64>> for CommandPos {
-    fn from(range: Range<u64>) -> Self {
+impl From<(u64, Range<u64>)> for CommandPos {
+    fn from((gen, range): (u64, Range<u64>)) -> Self {
         Self {
+            gen,
             pos: range.start,
             len: range.end - range.start,
         }
@@ -374,24 +347,85 @@ impl<W: Write + Seek> Seek for BufWriterWithPos<W> {
     }
 }
 
-const INIT_GEN: u64 = 1;
+/// Log files are named after a generation number with a "log" extension name.
+///
+/// Returns sorted generation numbers in the given directory
+fn sorted_gen_list(path: &Path) -> Result<Vec<u64>> {
+    let mut gen_list: Vec<u64> = fs::read_dir(&path)?
+        .flat_map(|res| -> Result<_> { Ok(res?.path()) })
+        .filter(|path| path.is_file() && path.extension() == Some("log".as_ref()))
+        .flat_map(|path| {
+            path.file_name()
+                .and_then(OsStr::to_str)
+                .map(|s| s.trim_end_matches(".log"))
+                .map(str::parse::<u64>)
+        })
+        .flatten()
+        .collect();
 
-// Log files are named after a generation number with a "log" extension name.
-// This function finds the latest generation number.
-fn latest_gen(dir: impl AsRef<Path>) -> Result<u64> {
-    let latest: Option<u64> = fs::read_dir(&dir)?
-        .flat_map(|res| res)
-        .filter_map(|entry| match entry.file_type() {
-            Ok(file_type) if file_type.is_file() => entry.file_name().into_string().ok(),
-            _ => None,
-        })
-        .filter_map(|file_name| {
-            if file_name.ends_with(".log") {
-                file_name.trim_end_matches(".log").parse::<u64>().ok()
-            } else {
-                None
+    gen_list.sort_unstable();
+    Ok(gen_list)
+}
+
+fn log_path(dir: &Path, gen: u64) -> PathBuf {
+    dir.join(format!("{}.log", gen))
+}
+
+/// Create a new log file with given generation number and add the reader to the readers map.
+///
+/// Returns the writer to the log.
+fn new_log_file(
+    path: &Path,
+    gen: u64,
+    readers: &mut HashMap<u64, BufReaderWithPos<File>>,
+) -> Result<BufWriterWithPos<File>> {
+    let path = log_path(&path, gen);
+    let writer = BufWriterWithPos::new(
+        OpenOptions::new()
+            .create(true)
+            .write(true)
+            .append(true)
+            .open(&path)?,
+    )?;
+    readers.insert(gen, BufReaderWithPos::new(File::open(&path)?)?);
+    Ok(writer)
+}
+
+/// Load the whole log file and store value positions in the index map.
+///
+/// Returns `uncompacted`, which is number of bytes that can be saved after a compaction.
+fn load(
+    gen: u64,
+    reader: &mut BufReaderWithPos<File>,
+    index: &mut BTreeMap<String, CommandPos>,
+) -> Result<u64> {
+    let mut uncompacted = 0;
+
+    // To make sure we read from the beginning of the file.
+    let mut pos = reader.seek(SeekFrom::Start(0))?;
+    let mut stream = Deserializer::from_reader(reader).into_iter::<Command>();
+
+    while let Some(cmd) = stream.next() {
+        let new_pos = stream.byte_offset() as u64;
+        match cmd? {
+            Command::Set { key, .. } => {
+                if let Some(old_cmd) = index.insert(key, (gen, pos..new_pos).into()) {
+                    uncompacted += old_cmd.len;
+                }
             }
-        })
-        .max();
-    Ok(latest.unwrap_or(INIT_GEN))
+            Command::Remove { key } => {
+                if let Some(old_cmd) = index.remove(&key) {
+                    uncompacted += old_cmd.len;
+                }
+
+                // The "remove" command itself can be deleted in the next compaction so we add
+                // its length to `uncompacted`.
+                uncompacted += new_pos - pos;
+            }
+        }
+
+        pos = new_pos;
+    }
+
+    Ok(uncompacted)
 }
