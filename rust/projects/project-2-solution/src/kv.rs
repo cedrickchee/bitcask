@@ -103,8 +103,6 @@ impl KvStore {
     /// store.set(String::from("my_key"), String::from("my_value")).unwrap();
     /// ```
     pub fn set(&mut self, key: String, value: String) -> Result<()> {
-        // self.kv_log.set(key, value)?;
-
         let command = Command::set(key, value);
         let pos = self.writer.pos;
         serde_json::to_writer(&mut self.writer, &command)?;
@@ -233,6 +231,9 @@ impl KvStore {
             self.readers.remove(&stale_gen);
             fs::remove_file(log_path(&self.path, stale_gen))?;
         }
+
+        // Reset uncompacted after compaction
+        self.uncompacted = 0;
 
         Ok(())
     }
