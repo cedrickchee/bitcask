@@ -1,6 +1,8 @@
+use std::env;
 use std::net::SocketAddr;
 use std::process::exit;
 
+use log::{debug, error, info, LevelFilter};
 use structopt::clap::arg_enum;
 use structopt::StructOpt;
 
@@ -33,21 +35,29 @@ arg_enum! {
 }
 
 fn main() {
+    env_logger::builder()
+        .filter_level(LevelFilter::Debug)
+        .init();
+
     let opts = Options::from_args();
     let server = run(opts);
     match server {
         Err(e) => {
-            println!("{}", e);
+            error!("{}", e);
             exit(1)
         }
-        Ok(()) => println!("Server running."),
+        Ok(()) => info!("Server running."),
     }
 }
 
 fn run(opt: Options) -> Result<()> {
+    info!("kvs-server {}", env!("CARGO_PKG_VERSION"));
+    info!("Storage engine: {}", opt.engine);
+    info!("Listening on {}", opt.addr);
+
     match opt.engine {
-        Engine::Kvs => println!("storage engine: kvs"),
-        Engine::Sled => println!("storage engine: sled"),
+        Engine::Kvs => debug!("storage engine: kvs"),
+        Engine::Sled => debug!("storage engine: sled"),
     }
 
     Ok(())
