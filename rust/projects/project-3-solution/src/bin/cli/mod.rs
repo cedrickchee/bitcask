@@ -1,8 +1,9 @@
+use std::net::SocketAddr;
 use structopt::StructOpt;
 
+// A struct to hold command line arguments parsed.
 #[derive(StructOpt, Debug)]
-#[structopt(name = "kvs")]
-/// A struct to hold command line arguments parsed.
+#[structopt(name = "kvs-client")]
 pub struct Options {
     #[structopt(subcommand)]
     pub cmd: SubCommand,
@@ -15,6 +16,9 @@ pub enum SubCommand {
         #[structopt(name = "KEY", required = true)]
         /// A string key
         key: String,
+        /// Sets the server address
+        #[structopt(long, value_name = "IP:PORT", default_value = "127.0.0.1:4000")]
+        addr: SocketAddr,
     },
     /// Set the value of a string key to a string
     Set {
@@ -24,11 +28,17 @@ pub enum SubCommand {
         #[structopt(name = "VALUE", required = true)]
         /// The string value of the key
         value: String,
+        /// Sets the server address
+        #[structopt(long, value_name = "IP:PORT", default_value = "127.0.0.1:4000")]
+        addr: SocketAddr,
     },
     /// Remove a given key
     Rm {
         #[structopt(name = "KEY", required = true)]
         /// A string key
         key: String,
+        /// Sets the server address
+        #[structopt(long, value_name = "IP:PORT", default_value = "127.0.0.1:4000")]
+        addr: SocketAddr,
     },
 }

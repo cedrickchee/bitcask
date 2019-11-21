@@ -11,7 +11,7 @@ fn main() -> Result<()> {
     let opts = Options::from_args();
 
     match opts.cmd {
-        SubCommand::Get { key } => {
+        SubCommand::Get { key, .. } => {
             let mut store = KvStore::open(current_dir()?)?;
 
             let output = match store.get(key)? {
@@ -21,11 +21,11 @@ fn main() -> Result<()> {
 
             println!("{}", output);
         }
-        SubCommand::Set { key, value } => {
+        SubCommand::Set { key, value, .. } => {
             let mut store = KvStore::open(current_dir()?)?;
             store.set(key, value)?;
         }
-        SubCommand::Rm { key } => {
+        SubCommand::Rm { key, .. } => {
             let mut store = KvStore::open(current_dir()?)?;
             match store.remove(key) {
                 Ok(()) => {}
