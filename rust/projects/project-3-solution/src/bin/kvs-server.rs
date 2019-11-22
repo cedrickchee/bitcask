@@ -9,7 +9,7 @@ use log::LevelFilter;
 use structopt::clap::arg_enum;
 use structopt::StructOpt;
 
-use kvs::{KvsServer, Result};
+use kvs::{KvStore, KvsServer, Result};
 
 // A struct to hold command line arguments parsed.
 #[derive(StructOpt, Debug)]
@@ -56,10 +56,13 @@ fn run(opt: Options) -> Result<()> {
 
     match opt.engine {
         Engine::Kvs => {
-            let server = KvsServer::new();
+            // The trait `KvsEngine` is implemented for `KvStore`. So, the trait
+            // bound `KvStore: KvsEngine` is satisfied.
+            let engine = KvStore::open(env::current_dir()?)?;
+            let server = KvsServer::new(engine);
             server.run(opt.addr)?;
         }
-        Engine::Sled => debug!("sled engine"),
+        Engine::Sled => unimplemented!(),
     }
 
     Ok(())
