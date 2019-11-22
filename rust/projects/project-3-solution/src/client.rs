@@ -44,7 +44,7 @@ impl KvsClient {
         self.writer.flush()?;
         let resp = SetResponse::deserialize(&mut self.reader)?;
         match resp {
-            SetResponse::Ok(value) => Ok(value),
+            SetResponse::Ok(_) => Ok(()),
             SetResponse::Err(msg) => Err(KvsError::StringError(msg)),
         }
     }
@@ -55,7 +55,7 @@ impl KvsClient {
         self.writer.flush()?;
         let resp = RemoveResponse::deserialize(&mut self.reader)?;
         match resp {
-            RemoveResponse::Ok(value) => Ok(value),
+            RemoveResponse::Ok(_) => Ok(()),
             RemoveResponse::Err(msg) => Err(KvsError::StringError(msg)),
         }
     }
