@@ -1,11 +1,15 @@
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufReader, BufWriter, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 
-use crate::Result;
+use serde::Deserialize;
+use serde_json::de::{Deserializer, IoRead};
+
+use crate::common::{GetResponse, RemoveResponse, Request, SetResponse};
+use crate::{KvsError, Result};
 
 /// The client of a key value store.
 pub struct KvsClient {
-    reader: BufReader<TcpStream>,
+    reader: Deserializer<IoRead<BufReader<TcpStream>>>,
     writer: BufWriter<TcpStream>,
 }
 
@@ -16,7 +20,7 @@ impl KvsClient {
         let tcp_writer = tcp_reader.try_clone()?;
 
         Ok(Self {
-            reader: BufReader::new(tcp_reader),
+            reader: Deserializer::from_reader(BufReader::new(tcp_reader)),
             writer: BufWriter::new(tcp_writer),
         })
     }
@@ -25,44 +29,34 @@ impl KvsClient {
     ///
     /// Returns `None` if the given key does not exist.
     pub fn get(&mut self, key: String) -> Result<Option<String>> {
-        let request = format!("+GET,{}\n", key);
-        self.writer.write(request.as_bytes())?;
+        serde_json::to_writer(&mut self.writer, &Request::Get { key })?;
         self.writer.flush()?;
-
-        let mut response = String::new();
-        let read_bytes = self.reader.read_line(&mut response)?;
-        println!("Server response with {} bytes: {}", read_bytes, response);
-
-        if response.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(response))
+        let resp = GetResponse::deserialize(&mut self.reader)?;
+        match resp {
+            GetResponse::Ok(value) => Ok(value),
+            GetResponse::Err(msg) => Err(KvsError::StringError(msg)),
         }
     }
 
     /// Set a given key and value Strings in the server.
     pub fn set(&mut self, key: String, value: String) -> Result<()> {
-        let request = format!("+SET,{},{}\n", key, value);
-        self.writer.write(request.as_bytes())?;
+        serde_json::to_writer(&mut self.writer, &Request::Set { key, value })?;
         self.writer.flush()?;
-
-        let mut response = String::new();
-        let read_bytes = self.reader.read_line(&mut response)?;
-        println!("Server response with {} bytes: {}", read_bytes, response);
-
-        Ok(())
+        let resp = SetResponse::deserialize(&mut self.reader)?;
+        match resp {
+            SetResponse::Ok(value) => Ok(value),
+            SetResponse::Err(msg) => Err(KvsError::StringError(msg)),
+        }
     }
 
     /// Remove a given key from the server.
     pub fn remove(&mut self, key: String) -> Result<()> {
-        let request = format!("+REMOVE,{}\n", key);
-        self.writer.write(request.as_bytes())?;
+        serde_json::to_writer(&mut self.writer, &Request::Remove { key })?;
         self.writer.flush()?;
-
-        let mut response = String::new();
-        let read_bytes = self.reader.read_line(&mut response)?;
-        println!("Server response with {} bytes: {}", read_bytes, response);
-
-        Ok(())
+        let resp = RemoveResponse::deserialize(&mut self.reader)?;
+        match resp {
+            RemoveResponse::Ok(value) => Ok(value),
+            RemoveResponse::Err(msg) => Err(KvsError::StringError(msg)),
+        }
     }
 }

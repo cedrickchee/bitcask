@@ -1,21 +1,15 @@
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufReader, BufWriter, Write};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 
-// use serde_json::Deserializer;
+use serde_json::Deserializer;
 
-use crate::{KvsEngine, Result};
+use crate::common::{GetResponse, RemoveResponse, Request, SetResponse};
+use crate::Result;
 
 /// The server of a key value store.
-pub struct KvsServer {
-    // engine: E,
-}
+pub struct KvsServer {}
 
 impl KvsServer {
-    /// Create a `KvsServer` with a given storage engine.
-    // pub fn new(engine: E) -> Self {
-    //     Self { engine }
-    // }
-
     /// Create a `KvsServer` with a given storage engine.
     pub fn new() -> Self {
         Self {}
@@ -42,28 +36,40 @@ impl KvsServer {
 
     fn serve(&self, tcp: TcpStream) -> Result<()> {
         let peer_addr = tcp.peer_addr()?;
-        // let reader = BufReader::new(&tcp);
-        // let mut writer = BufWriter::new(&tcp);
-        // let req_reader = Deserializer::from_reader(reader);
-
-        // ********** Reading request from the TCP stream **********
-        let mut buffer = Vec::new();
-        let mut reader = BufReader::new(&tcp);
+        let reader = BufReader::new(&tcp);
         let mut writer = BufWriter::new(&tcp);
-        while let Ok(read_bytes) = reader.read_until(b'\n', &mut buffer) {
-            if read_bytes == 0 {
-                break;
+        let req_reader = Deserializer::from_reader(reader).into_iter::<Request>();
+
+        macro_rules! send_resp {
+            ($resp:expr) => {{
+                let resp = $resp;
+                serde_json::to_writer(&mut writer, &resp)?;
+                writer.flush()?;
+                info!("Response sent to {}: {:?}", peer_addr, resp);
+            };};
+        }
+
+        for request in req_reader {
+            let req = request?;
+            info!("Received request from {}: {:?}", peer_addr, req);
+
+            match req {
+                Request::Set { key, value } => {
+                    debug!("key: {}, value: {}", key, value);
+                    let engine_response = SetResponse::Ok(());
+                    send_resp!(engine_response);
+                }
+                Request::Get { key } => {
+                    debug!("key: {}", key);
+                    let engine_response = GetResponse::Ok(Some("value42".to_string()));
+                    send_resp!(engine_response);
+                }
+                Request::Remove { key } => {
+                    debug!("key: {}", key);
+                    let engine_response = RemoveResponse::Ok(());
+                    send_resp!(engine_response);
+                }
             }
-
-            let request = String::from_utf8_lossy(&buffer);
-            info!("Receive request from {}: {:?}", peer_addr, request);
-
-            // ********** Writing response to the TCP stream **********
-            let response = b"+PONG\r\n";
-            // stream.write(response).expect("Response failed");
-            writer.write(response)?;
-            writer.flush()?;
-            info!("Response sent to {}: {:?}", peer_addr, response);
         }
 
         Ok(())

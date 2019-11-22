@@ -8,6 +8,7 @@
 extern crate log;
 
 mod client;
+mod common;
 mod engines;
 mod error;
 mod server;
