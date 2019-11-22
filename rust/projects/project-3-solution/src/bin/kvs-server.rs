@@ -1,12 +1,15 @@
+#[macro_use]
+extern crate log;
+
 use std::env;
 use std::net::SocketAddr;
 use std::process::exit;
 
-use log::{debug, error, info, LevelFilter};
+use log::LevelFilter;
 use structopt::clap::arg_enum;
 use structopt::StructOpt;
 
-use kvs::Result;
+use kvs::{KvsServer, Result};
 
 // A struct to hold command line arguments parsed.
 #[derive(StructOpt, Debug)]
@@ -40,13 +43,9 @@ fn main() {
         .init();
 
     let opts = Options::from_args();
-    let server = run(opts);
-    match server {
-        Err(e) => {
-            error!("{}", e);
-            exit(1)
-        }
-        Ok(()) => info!("Server running."),
+    if let Err(e) = run(opts) {
+        error!("{}", e);
+        exit(1)
     }
 }
 
@@ -56,8 +55,11 @@ fn run(opt: Options) -> Result<()> {
     info!("Listening on {}", opt.addr);
 
     match opt.engine {
-        Engine::Kvs => debug!("storage engine: kvs"),
-        Engine::Sled => debug!("storage engine: sled"),
+        Engine::Kvs => {
+            let server = KvsServer::new();
+            server.run(opt.addr)?;
+        }
+        Engine::Sled => debug!("sled engine"),
     }
 
     Ok(())
