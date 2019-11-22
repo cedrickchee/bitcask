@@ -6,3 +6,9 @@ target/
 
 # Database log files
 **/*.log
+
+# Sled database and configuration files
+conf
+db
+snap.*
+blobs/
