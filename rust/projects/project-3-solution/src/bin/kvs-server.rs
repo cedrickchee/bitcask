@@ -9,7 +9,7 @@ use log::LevelFilter;
 use structopt::clap::arg_enum;
 use structopt::StructOpt;
 
-use kvs::{KvStore, KvsServer, Result};
+use kvs::{KvStore, KvsServer, Result, SledKvsEngine};
 
 // A struct to hold command line arguments parsed.
 #[derive(StructOpt, Debug)]
@@ -63,7 +63,7 @@ fn run(opt: Options) -> Result<()> {
             server.run(opt.addr)?;
         }
         Engine::Sled => {
-            let engine = sled::Db::open(env::current_dir()?)?;
+            let engine = SledKvsEngine::new(sled::Db::open(env::current_dir()?)?);
             let server = KvsServer::new(engine);
             server.run(opt.addr)?;
         }
