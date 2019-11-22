@@ -12,3 +12,6 @@ conf
 db
 snap.*
 blobs/
+
+# Server configuration file
+engine
