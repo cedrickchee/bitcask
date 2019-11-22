@@ -62,7 +62,11 @@ fn run(opt: Options) -> Result<()> {
             let server = KvsServer::new(engine);
             server.run(opt.addr)?;
         }
-        Engine::Sled => unimplemented!(),
+        Engine::Sled => {
+            let engine = sled::Db::open(env::current_dir()?)?;
+            let server = KvsServer::new(engine);
+            server.run(opt.addr)?;
+        }
     }
 
     Ok(())

@@ -172,7 +172,6 @@ fn cli_log_configuration() {
 }
 
 #[test]
-#[ignore]
 fn cli_wrong_engine() {
     // sled first, kvs second
     {
