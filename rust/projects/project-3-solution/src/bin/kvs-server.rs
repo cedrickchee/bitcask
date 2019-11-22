@@ -9,7 +9,7 @@ use log::LevelFilter;
 use structopt::clap::arg_enum;
 use structopt::StructOpt;
 
-use kvs::{KvStore, KvsServer, Result, SledKvsEngine};
+use kvs::{KvStore, KvsEngine, KvsServer, Result, SledKvsEngine};
 
 // A struct to hold command line arguments parsed.
 #[derive(StructOpt, Debug)]
@@ -55,19 +55,19 @@ fn run(opt: Options) -> Result<()> {
     info!("Listening on {}", opt.addr);
 
     match opt.engine {
-        Engine::Kvs => {
-            // The trait `KvsEngine` is implemented for `KvStore`. So, the trait
-            // bound `KvStore: KvsEngine` is satisfied.
-            let engine = KvStore::open(env::current_dir()?)?;
-            let server = KvsServer::new(engine);
-            server.run(opt.addr)?;
-        }
-        Engine::Sled => {
-            let engine = SledKvsEngine::new(sled::Db::open(env::current_dir()?)?);
-            let server = KvsServer::new(engine);
-            server.run(opt.addr)?;
-        }
+        Engine::Kvs => run_with_engine(KvStore::open(env::current_dir()?)?, opt.addr)?,
+        Engine::Sled => run_with_engine(
+            SledKvsEngine::new(sled::Db::open(env::current_dir()?)?),
+            opt.addr,
+        )?,
     }
 
     Ok(())
+}
+
+fn run_with_engine<E: KvsEngine>(engine: E, addr: SocketAddr) -> Result<()> {
+    // The trait `KvsEngine` is implemented for `KvStore`. So, the trait
+    // bound `KvStore: KvsEngine` is satisfied.
+    let server = KvsServer::new(engine);
+    server.run(addr)
 }
