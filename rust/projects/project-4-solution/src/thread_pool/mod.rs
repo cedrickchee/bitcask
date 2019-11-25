@@ -22,5 +22,5 @@ pub trait ThreadPool {
     /// Spawns a function into the threadpool.
     fn spawn<F>(&self, job: F)
     where
-        F: FnOnce();
+        F: FnOnce() + Send + 'static;
 }

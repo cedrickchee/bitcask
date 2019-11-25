@@ -1,3 +1,5 @@
+use std::thread;
+
 use super::ThreadPool;
 use crate::Result;
 
@@ -12,10 +14,10 @@ impl ThreadPool for NaiveThreadPool {
         Ok(Self)
     }
 
-    fn spawn<F>(&self, _job: F)
+    fn spawn<F>(&self, job: F)
     where
-        F: FnOnce(),
+        F: FnOnce() + Send + 'static,
     {
-        unimplemented!();
+        thread::spawn(job);
     }
 }
