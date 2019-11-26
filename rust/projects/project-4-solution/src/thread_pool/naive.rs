@@ -8,9 +8,7 @@ use crate::Result;
 pub struct NaiveThreadPool;
 
 impl ThreadPool for NaiveThreadPool {
-    /// New ...
-    fn new(threads: u32) -> Result<Self> {
-        println!("num. of threads: {}", threads);
+    fn new(_threads: u32) -> Result<Self> {
         Ok(Self)
     }
 
