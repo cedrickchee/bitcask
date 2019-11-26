@@ -8,9 +8,9 @@ mod naive;
 mod rayon;
 mod shared_queue;
 
-pub use naive::NaiveThreadPool;
-pub use rayon::RayonThreadPool;
-pub use shared_queue::SharedQueueThreadPool;
+pub use self::naive::NaiveThreadPool;
+pub use self::rayon::RayonThreadPool;
+pub use self::shared_queue::SharedQueueThreadPool;
 
 /// The trait that all thread pools should implement.
 pub trait ThreadPool {
