@@ -19,7 +19,7 @@ pub fn set_bench(c: &mut Criterion) {
                     let temp_dir = TempDir::new().unwrap();
                     KvStore::open(temp_dir.path()).unwrap()
                 },
-                |mut engine| {
+                |engine| {
                     for i in 1..(1 << 12) {
                         engine
                             .set(format!("key{}", i), "value".to_string())
@@ -37,7 +37,7 @@ pub fn set_bench(c: &mut Criterion) {
                 let tmp_dir = TempDir::new().unwrap();
                 SledKvsEngine::new(sled::Db::open(tmp_dir.path()).unwrap())
             },
-            |mut engine| {
+            |engine| {
                 for i in 1..(1 << 12) {
                     engine
                         .set(format!("key{}", i), "value".to_string())
@@ -55,7 +55,7 @@ pub fn get_bench(c: &mut Criterion) {
         "kvs",
         |b, i| {
             let temp_dir = TempDir::new().unwrap();
-            let mut engine = KvStore::open(temp_dir.path()).unwrap();
+            let engine = KvStore::open(temp_dir.path()).unwrap();
             for key_i in 1..(1 << i) {
                 engine
                     .set(format!("key{}", key_i), "value".to_string())
@@ -72,7 +72,7 @@ pub fn get_bench(c: &mut Criterion) {
     )
     .with_function("sled", |b, i| {
         let tmp_dir = TempDir::new().unwrap();
-        let mut engine = SledKvsEngine::new(sled::Db::open(tmp_dir.path()).unwrap());
+        let engine = SledKvsEngine::new(sled::Db::open(tmp_dir.path()).unwrap());
         for key_i in 1..(1 << i) {
             engine
                 .set(format!("key{}", key_i), "value".to_string())
