@@ -22,9 +22,9 @@ pub trait ThreadPool {
     where
         Self: Sized;
 
-    /// Spawns a function into the threadpool.
+    /// Spawns a function into the thread pool.
     ///
-    /// Spawning always succeeds, but if the function panics the threadpool continues
+    /// Spawning always succeeds, but if the function panics the thread pool continues
     /// to operate with the same number of threads — the thread count is not
     /// reduced nor is the thread pool destroyed, corrupted or invalidated.
     fn spawn<F>(&self, job: F)

@@ -4,7 +4,7 @@ use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use serde_json::Deserializer;
 
 use crate::common::{GetResponse, RemoveResponse, Request, SetResponse};
-use crate::thread_pool::{NaiveThreadPool, ThreadPool};
+use crate::thread_pool::{SharedQueueThreadPool, ThreadPool};
 use crate::{KvsEngine, Result};
 
 /// The server of a key value store.
@@ -20,7 +20,7 @@ impl<E: KvsEngine> KvsServer<E> {
 
     /// Run the server listening on the given address
     pub fn run<A: ToSocketAddrs>(self, addr: A) -> Result<()> {
-        let thread_pool = NaiveThreadPool::new(1)?;
+        let thread_pool = SharedQueueThreadPool::new(num_cpus::get() as u32)?;
         let listener = TcpListener::bind(addr)?;
         for stream in listener.incoming() {
             debug!("Connection established");
