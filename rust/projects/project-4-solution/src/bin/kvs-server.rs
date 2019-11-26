@@ -74,7 +74,7 @@ fn run(opt: Options) -> Result<()> {
     // Write engine to file.
     fs::write(env::current_dir()?.join("engine"), format!("{}", engine))?;
 
-    let thread_pool = SharedQueueThreadPool::new(num_cpus::get() as u32)?;
+    let thread_pool = RayonThreadPool::new(num_cpus::get() as u32)?;
 
     match engine {
         Engine::Kvs => run_with(KvStore::open(env::current_dir()?)?, thread_pool, opt.addr)?,
