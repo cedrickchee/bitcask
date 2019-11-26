@@ -4,30 +4,33 @@ use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use serde_json::Deserializer;
 
 use crate::common::{GetResponse, RemoveResponse, Request, SetResponse};
-use crate::thread_pool::{SharedQueueThreadPool, ThreadPool};
+use crate::thread_pool::ThreadPool;
 use crate::{KvsEngine, Result};
 
 /// The server of a key value store.
-pub struct KvsServer<E: KvsEngine> {
+pub struct KvsServer<E: KvsEngine, P: ThreadPool> {
     engine: E,
+    thread_pool: P,
 }
 
-impl<E: KvsEngine> KvsServer<E> {
+impl<E: KvsEngine, P: ThreadPool> KvsServer<E, P> {
     /// Create a `KvsServer` with a given storage engine.
-    pub fn new(engine: E) -> Self {
-        Self { engine }
+    pub fn new(engine: E, thread_pool: P) -> Self {
+        Self {
+            engine,
+            thread_pool,
+        }
     }
 
     /// Run the server listening on the given address
     pub fn run<A: ToSocketAddrs>(self, addr: A) -> Result<()> {
-        let thread_pool = SharedQueueThreadPool::new(num_cpus::get() as u32)?;
         let listener = TcpListener::bind(addr)?;
         for stream in listener.incoming() {
             debug!("Connection established");
 
             let engine = self.engine.clone();
 
-            thread_pool.spawn(move || match stream {
+            self.thread_pool.spawn(move || match stream {
                 Ok(stream) => {
                     if let Err(e) = serve(engine, stream) {
                         error!("Error on serving client: {}", e);
