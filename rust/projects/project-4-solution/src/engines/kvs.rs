@@ -21,7 +21,7 @@ const COMPACTION_THRESHOLD: u64 = 1024;
 ///
 /// Key/value pairs are stored in memory and also persisted to disk in a log.
 /// Log files are named after monotonically increasing generation numbers with
-/// a `log` extension name. Index as a `BTreeMap` in memory stores the keys and
+/// a `log` extension name. Index as a skip list in memory stores the keys and
 /// the value positions for fast query.
 ///
 /// Example:
@@ -166,11 +166,12 @@ impl KvsEngine for KvStore {
     }
 }
 
+/// A single thread reader.
 struct KvStoreReader {
     path: Arc<PathBuf>,
     readers: RefCell<BTreeMap<u64, BufReaderWithPos<File>>>,
     // Generation of the latest compaction file.
-    // Readers with a generation before safe_point can be closed
+    // Readers with a generation before safe_point can be closed.
     safe_point: Arc<AtomicU64>,
 }
 
@@ -198,16 +199,9 @@ impl KvStoreReader {
     where
         F: FnOnce(io::Take<&mut BufReaderWithPos<File>>) -> Result<R>,
     {
-        let mut readers = self.readers.borrow_mut();
+        self.close_stale_handles();
 
-        // Close readers of stale files.
-        while !readers.is_empty() {
-            let first_gen = *readers.keys().next().unwrap();
-            if self.safe_point.load(Ordering::SeqCst) <= first_gen {
-                break;
-            }
-            readers.remove(&first_gen);
-        }
+        let mut readers = self.readers.borrow_mut();
 
         // Open the file if we haven't opened it in this `KvStoreReader`.
         // We don't use entry API here because we want the errors to be propogated.
@@ -223,6 +217,24 @@ impl KvStoreReader {
 
         let cmd_reader = reader.take(cmd_pos.len);
         f(cmd_reader)
+    }
+
+    /// Close file handles with generation number less than safe_point.
+    ///
+    /// `safe_point` is updated to the latest compaction gen after a compaction finishes.
+    /// The compaction generation contains the sum of all operations before it and the
+    /// in-memory index contains no entries with generation number less than safe_point.
+    /// So we can safely close those file handles and the stale files can be deleted.
+    fn close_stale_handles(&self) {
+        let mut readers = self.readers.borrow_mut();
+
+        while !readers.is_empty() {
+            let first_gen = *readers.keys().next().unwrap();
+            if self.safe_point.load(Ordering::SeqCst) <= first_gen {
+                break;
+            }
+            readers.remove(&first_gen);
+        }
     }
 }
 
@@ -315,7 +327,18 @@ impl KvStoreWriter {
         // to do it, particularly in a case where data must not be lost.
         compaction_writer.flush()?;
 
-        // Remove stale log files
+        self.reader
+            .safe_point
+            .store(compaction_gen, Ordering::SeqCst);
+        self.reader.close_stale_handles();
+
+        // Remove stale log files.
+        //
+        // Note that actually these files are not deleted immediately because `KvStoreReader`s
+        // still keep open file handles. When `KvStoreReader` is used next time, it will clear
+        // its stale file handles. On Unix, the files will be deleted after all the handles
+        // are closed. On Windows, the deletions below will fail and stale files are expected
+        // to be deleted in the next compaction.
         let stale_gens = sorted_gen_list(&self.path)?
             .into_iter()
             .filter(|&gen| gen < compaction_gen);
@@ -328,10 +351,6 @@ impl KvStoreWriter {
 
         // Reset uncompacted after compaction
         self.uncompacted = 0;
-
-        self.reader
-            .safe_point
-            .store(compaction_gen, Ordering::SeqCst);
 
         Ok(())
     }
