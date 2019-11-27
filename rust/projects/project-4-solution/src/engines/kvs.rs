@@ -1,10 +1,11 @@
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crossbeam_skiplist::SkipMap;
@@ -75,11 +76,16 @@ impl KvStore {
         let current_gen = gen_list.last().unwrap_or(&0) + 1;
         let writer = new_log_file(&path, current_gen)?;
 
-        let reader = KvStoreReader::new(Arc::clone(&path));
+        let reader = KvStoreReader {
+            path: Arc::clone(&path),
+            readers: RefCell::new(BTreeMap::new()),
+            safe_point: Arc::new(AtomicU64::new(0)),
+        };
 
         let writer = KvStoreWriter {
             path: Arc::clone(&path),
             writer,
+            reader: reader.clone(),
             uncompacted,
             current_gen,
             index: Arc::clone(&index),
@@ -163,6 +169,9 @@ impl KvsEngine for KvStore {
 struct KvStoreReader {
     path: Arc<PathBuf>,
     readers: RefCell<BTreeMap<u64, BufReaderWithPos<File>>>,
+    // Generation of the latest compaction file.
+    // Readers with a generation before safe_point can be closed
+    safe_point: Arc<AtomicU64>,
 }
 
 impl Clone for KvStoreReader {
@@ -171,30 +180,36 @@ impl Clone for KvStoreReader {
             path: Arc::clone(&self.path),
             // Don't use other KvStoreReader's readers
             readers: RefCell::new(BTreeMap::new()),
+            safe_point: Arc::clone(&self.safe_point),
         }
     }
 }
 
 impl KvStoreReader {
-    fn new(path: Arc<PathBuf>) -> Self {
-        Self {
-            path,
-            readers: RefCell::new(BTreeMap::new()),
-        }
-    }
-
+    /// Read the log file at the given `CommandPos` and deserialize it to `Command`.
     fn read_command(&self, cmd_pos: CommandPos) -> Result<Command> {
         self.read_and(cmd_pos, |cmd_reader| {
             Ok(serde_json::from_reader(cmd_reader)?)
         })
     }
 
+    /// Read the log file at the given `CommandPos`.
     fn read_and<F, R>(&self, cmd_pos: CommandPos, f: F) -> Result<R>
     where
         F: FnOnce(io::Take<&mut BufReaderWithPos<File>>) -> Result<R>,
     {
         let mut readers = self.readers.borrow_mut();
 
+        // Close readers of stale files.
+        while !readers.is_empty() {
+            let first_gen = *readers.keys().next().unwrap();
+            if self.safe_point.load(Ordering::SeqCst) <= first_gen {
+                break;
+            }
+            readers.remove(&first_gen);
+        }
+
+        // Open the file if we haven't opened it in this `KvStoreReader`.
         // We don't use entry API here because we want the errors to be propogated.
         if !readers.contains_key(&cmd_pos.gen) {
             let reader = BufReaderWithPos::new(File::open(log_path(&self.path, cmd_pos.gen))?)?;
@@ -214,6 +229,7 @@ impl KvStoreReader {
 struct KvStoreWriter {
     path: Arc<PathBuf>,
     writer: BufWriterWithPos<File>,
+    reader: KvStoreReader,
     /// The number of bytes representing "stale" commands
     /// that could be deleted during a compaction.
     uncompacted: u64,
@@ -284,13 +300,10 @@ impl KvStoreWriter {
         // Mostly read sequentially; with a sorted index like a b-tree,
         // there would be no copying of the index.
         let mut new_pos = 0; // pos in the new log file
-        let reader = KvStoreReader::new(Arc::clone(&self.path));
-        let mut stale_gens = HashSet::new();
         for entry in &mut self.index.iter() {
-            let len = reader.read_and(*entry.value(), |mut entry_reader| {
+            let len = self.reader.read_and(*entry.value(), |mut entry_reader| {
                 Ok(io::copy(&mut entry_reader, &mut compaction_writer)?)
             })?;
-            stale_gens.insert(entry.value().gen);
             self.index.insert(
                 entry.key().clone(),
                 (compaction_gen, new_pos..new_pos + len).into(),
@@ -303,12 +316,22 @@ impl KvStoreWriter {
         compaction_writer.flush()?;
 
         // Remove stale log files
+        let stale_gens = sorted_gen_list(&self.path)?
+            .into_iter()
+            .filter(|&gen| gen < compaction_gen);
         for stale_gen in stale_gens {
-            fs::remove_file(log_path(&self.path, stale_gen))?;
+            let file_path = log_path(&self.path, stale_gen);
+            if let Err(e) = fs::remove_file(&file_path) {
+                error!("{:?} cannot be deleted: {}", file_path, e);
+            }
         }
 
         // Reset uncompacted after compaction
         self.uncompacted = 0;
+
+        self.reader
+            .safe_point
+            .store(compaction_gen, Ordering::SeqCst);
 
         Ok(())
     }
