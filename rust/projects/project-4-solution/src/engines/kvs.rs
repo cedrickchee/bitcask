@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
@@ -34,6 +34,7 @@ const COMPACTION_THRESHOLD: u64 = 1024;
 /// let val = store.get(String::from("my_key")).unwrap();
 /// assert_eq!(val, Some(String::from("my_value")));
 /// ```
+#[derive(Clone)]
 pub struct KvStore {
     /// Directory the log and other data
     path: Arc<PathBuf>,
@@ -43,17 +44,6 @@ pub struct KvStore {
     index: Arc<SkipMap<String, CommandPos>>,
     /// Writer of the current log
     writer: Arc<Mutex<KvStoreWriter>>,
-}
-
-impl Clone for KvStore {
-    fn clone(&self) -> Self {
-        KvStore {
-            path: Arc::clone(&self.path),
-            reader: KvStoreReader::new(Arc::clone(&self.path)),
-            index: Arc::clone(&self.index),
-            writer: Arc::clone(&self.writer),
-        }
-    }
 }
 
 impl KvStore {
@@ -72,7 +62,7 @@ impl KvStore {
 
         // Initialized index and log readers.
         let index = Arc::new(SkipMap::new());
-        let mut readers = HashMap::new(); // one reader for one log file
+        let mut readers = BTreeMap::new(); // one reader for one log file
 
         // Loop over multiple log files if any in a directory
         for &gen in &gen_list {
@@ -172,14 +162,24 @@ impl KvsEngine for KvStore {
 
 struct KvStoreReader {
     path: Arc<PathBuf>,
-    readers: RefCell<HashMap<u64, BufReaderWithPos<File>>>,
+    readers: RefCell<BTreeMap<u64, BufReaderWithPos<File>>>,
+}
+
+impl Clone for KvStoreReader {
+    fn clone(&self) -> Self {
+        Self {
+            path: Arc::clone(&self.path),
+            // Don't use other KvStoreReader's readers
+            readers: RefCell::new(BTreeMap::new()),
+        }
+    }
 }
 
 impl KvStoreReader {
     fn new(path: Arc<PathBuf>) -> Self {
         Self {
             path,
-            readers: RefCell::new(HashMap::new()),
+            readers: RefCell::new(BTreeMap::new()),
         }
     }
 
