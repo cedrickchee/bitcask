@@ -4,7 +4,15 @@ use std::thread;
 use super::ThreadPool;
 use crate::Result;
 
+// Note for training course: the thread pool is not implemented using `catch_unwind` because it
+// would require the task to be `UnwindSafe`.
+
 /// A thread pool using a shared queue inside.
+///
+/// If a spawned task panics, the old thread will be destroyed and a new one will be
+/// created. It fails silently when any failure to create the thread at the OS level
+/// is captured after the thread pool is created. So, the thread number in the pool
+/// can decrease to zero, then spawning a task to the thread pool will panic.
 pub struct SharedQueueThreadPool {
     sender: Sender<Box<dyn FnOnce() + Send + 'static>>,
 }

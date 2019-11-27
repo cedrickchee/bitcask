@@ -37,18 +37,20 @@ const COMPACTION_THRESHOLD: u64 = 1024;
 /// ```
 #[derive(Clone)]
 pub struct KvStore {
-    /// Directory the log and other data
+    /// Directory for the log and other data
     path: Arc<PathBuf>,
-    /// Map generation number to the file reader
+    /// The log reader
     reader: KvStoreReader,
-    /// Stores keys and the pos of the last command
+    /// The in-memory index from key to log pointer
     index: Arc<SkipMap<String, CommandPos>>,
-    /// Writer of the current log
+    /// The log writer
     writer: Arc<Mutex<KvStoreWriter>>,
 }
 
 impl KvStore {
     /// Opens the store with the given path.
+    ///
+    /// This will create a new directory if the given one does not exist.
     ///
     /// # Errors
     ///
@@ -167,8 +169,12 @@ impl KvsEngine for KvStore {
 }
 
 /// A single thread reader.
+///
+/// Each `KvStore` instance has its own `KvStoreReader` and `KvStoreReader`s open the same files
+/// separately. So the user can read concurrently through multiple `KvStore`s in different threads.
 struct KvStoreReader {
     path: Arc<PathBuf>,
+    // Map generation number to the file reader
     readers: RefCell<BTreeMap<u64, BufReaderWithPos<File>>>,
     // Generation of the latest compaction file.
     // Readers with a generation before safe_point can be closed.
@@ -189,13 +195,13 @@ impl Clone for KvStoreReader {
 impl KvStoreReader {
     /// Read the log file at the given `CommandPos` and deserialize it to `Command`.
     fn read_command(&self, cmd_pos: CommandPos) -> Result<Command> {
-        self.read_and(cmd_pos, |cmd_reader| {
+        self.build_cmd_reader(cmd_pos, |cmd_reader| {
             Ok(serde_json::from_reader(cmd_reader)?)
         })
     }
 
-    /// Read the log file at the given `CommandPos`.
-    fn read_and<F, R>(&self, cmd_pos: CommandPos, f: F) -> Result<R>
+    /// Build command reader from reader and `CommandPos`.
+    fn build_cmd_reader<F, R>(&self, cmd_pos: CommandPos, f: F) -> Result<R>
     where
         F: FnOnce(io::Take<&mut BufReaderWithPos<File>>) -> Result<R>,
     {
@@ -313,9 +319,11 @@ impl KvStoreWriter {
         // there would be no copying of the index.
         let mut new_pos = 0; // pos in the new log file
         for entry in &mut self.index.iter() {
-            let len = self.reader.read_and(*entry.value(), |mut entry_reader| {
-                Ok(io::copy(&mut entry_reader, &mut compaction_writer)?)
-            })?;
+            let len = self
+                .reader
+                .build_cmd_reader(*entry.value(), |mut entry_reader| {
+                    Ok(io::copy(&mut entry_reader, &mut compaction_writer)?)
+                })?;
             self.index.insert(
                 entry.key().clone(),
                 (compaction_gen, new_pos..new_pos + len).into(),

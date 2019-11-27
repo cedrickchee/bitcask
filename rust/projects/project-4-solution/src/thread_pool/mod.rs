@@ -1,6 +1,5 @@
 //! This module provides various thread pools. All thread pools should implement
 //! the `ThreadPool` trait.
-//!
 
 use crate::Result;
 
