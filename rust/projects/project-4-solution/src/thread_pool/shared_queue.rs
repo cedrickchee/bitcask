@@ -1,5 +1,5 @@
 use crossbeam::channel::{self, Receiver, Sender};
-use std::{panic, thread};
+use std::thread;
 
 use super::ThreadPool;
 use crate::Result;
@@ -14,7 +14,7 @@ impl ThreadPool for SharedQueueThreadPool {
         let (sender, receiver) = channel::unbounded::<Box<dyn FnOnce() + Send + 'static>>();
 
         for _ in 0..threads {
-            let receiver = receiver.clone();
+            let receiver = TaskReceiver(receiver.clone());
             thread::Builder::new().spawn(move || run_task(receiver))?;
         }
 
@@ -36,22 +36,27 @@ impl ThreadPool for SharedQueueThreadPool {
     }
 }
 
-fn run_task(receiver: Receiver<Box<dyn FnOnce() + Send + 'static>>) {
-    let receiver2 = receiver.clone();
-    panic::set_hook(Box::new(move |panic_info| {
-        error!("Thread panicked: {}", panic_info);
-        let receiver = receiver2.clone();
-        if let Err(e) = thread::Builder::new().spawn(move || run_task(receiver)) {
-            error!("Failed to spawn a thread: {}", e);
-        }
-    }));
+#[derive(Clone)]
+struct TaskReceiver(Receiver<Box<dyn FnOnce() + Send + 'static>>);
 
+impl Drop for TaskReceiver {
+    fn drop(&mut self) {
+        if thread::panicking() {
+            let receiver = self.clone();
+            if let Err(e) = thread::Builder::new().spawn(move || run_task(receiver)) {
+                error!("Failed to spawn a thread: {}", e);
+            }
+        }
+    }
+}
+
+fn run_task(receiver: TaskReceiver) {
     loop {
-        match receiver.recv() {
+        match receiver.0.recv() {
             Ok(task) => {
                 task();
             }
-            Err(_) => info!("Thread exits because the thread pool is destroyed."),
+            Err(_) => debug!("Thread exits because the thread pool is destroyed."),
         }
     }
 }
