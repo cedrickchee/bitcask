@@ -1,62 +1,92 @@
-use std::io::{BufReader, BufWriter, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::SocketAddr;
 
-use serde::Deserialize;
-use serde_json::de::{Deserializer, IoRead};
+use tokio::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
+use tokio::net::TcpStream;
+use tokio::prelude::*;
+use tokio_serde_json::{ReadJson, WriteJson};
 
 use crate::common::{GetResponse, RemoveResponse, Request, SetResponse};
-use crate::{KvsError, Result};
+use crate::KvsError;
 
 /// The client of a key value store.
 pub struct KvsClient {
-    reader: Deserializer<IoRead<BufReader<TcpStream>>>,
-    writer: BufWriter<TcpStream>,
+    tcp: Option<TcpStream>,
 }
 
 impl KvsClient {
     /// Connect to `addr` to access `KvsServer`.
-    pub fn connect<A: ToSocketAddrs>(addr: A) -> Result<Self> {
-        let tcp_reader = TcpStream::connect(addr)?;
-        let tcp_writer = tcp_reader.try_clone()?;
-
-        Ok(Self {
-            reader: Deserializer::from_reader(BufReader::new(tcp_reader)),
-            writer: BufWriter::new(tcp_writer),
-        })
+    pub fn connect(addr: SocketAddr) -> impl Future<Item = Self, Error = KvsError> {
+        TcpStream::connect(&addr)
+            .map(|tcp| KvsClient { tcp: Some(tcp) })
+            .map_err(|e| e.into())
     }
 
     /// Get a value from the server using a key String.
-    ///
-    /// Returns `None` if the given key does not exist.
-    pub fn get(&mut self, key: String) -> Result<Option<String>> {
-        serde_json::to_writer(&mut self.writer, &Request::Get { key })?;
-        self.writer.flush()?;
-        let resp = GetResponse::deserialize(&mut self.reader)?;
-        match resp {
-            GetResponse::Ok(value) => Ok(value),
-            GetResponse::Err(msg) => Err(KvsError::StringError(msg)),
-        }
+    pub fn get(
+        mut self,
+        key: String,
+    ) -> impl Future<Item = (Option<String>, Self), Error = KvsError> {
+        let tcp = self.tcp.take().unwrap();
+        let write_json = WriteJson::new(FramedWrite::new(tcp, LengthDelimitedCodec::new()));
+        let tcp = write_json
+            .send(Request::Get { key })
+            .map(|serialized| serialized.into_inner().into_inner());
+        tcp.and_then(|tcp| {
+            let read_json = ReadJson::new(FramedRead::new(tcp, LengthDelimitedCodec::new()));
+            read_json.into_future().map_err(|(err, _)| err)
+        })
+        .map_err(|e| e.into())
+        .and_then(move |(resp, read_json)| {
+            self.tcp = Some(read_json.into_inner().into_inner());
+            match resp {
+                Some(GetResponse::Ok(value)) => Ok((value, self)),
+                Some(GetResponse::Err(msg)) => Err(KvsError::StringError(msg)),
+                None => Err(KvsError::StringError("No response received".to_owned())),
+            }
+        })
     }
 
     /// Set a given key and value Strings in the server.
-    pub fn set(&mut self, key: String, value: String) -> Result<()> {
-        serde_json::to_writer(&mut self.writer, &Request::Set { key, value })?;
-        self.writer.flush()?;
-        let resp = SetResponse::deserialize(&mut self.reader)?;
-        match resp {
-            SetResponse::Ok(_) => Ok(()),
-            SetResponse::Err(msg) => Err(KvsError::StringError(msg)),
-        }
+    pub fn set(mut self, key: String, value: String) -> impl Future<Item = Self, Error = KvsError> {
+        let tcp = self.tcp.take().unwrap();
+        let write_json = WriteJson::new(FramedWrite::new(tcp, LengthDelimitedCodec::new()));
+        let tcp = write_json
+            .send(Request::Set { key, value })
+            .map(|serialized| serialized.into_inner().into_inner());
+        tcp.and_then(|tcp| {
+            let read_json = ReadJson::new(FramedRead::new(tcp, LengthDelimitedCodec::new()));
+            read_json.into_future().map_err(|(err, _)| err)
+        })
+        .map_err(|e| e.into())
+        .and_then(move |(resp, read_json)| {
+            self.tcp = Some(read_json.into_inner().into_inner());
+            match resp {
+                Some(SetResponse::Ok(_)) => Ok(self),
+                Some(SetResponse::Err(msg)) => Err(KvsError::StringError(msg)),
+                None => Err(KvsError::StringError("No response received".to_owned())),
+            }
+        })
     }
 
     /// Remove a given key from the server.
-    pub fn remove(&mut self, key: String) -> Result<()> {
-        serde_json::to_writer(&mut self.writer, &Request::Remove { key })?;
-        self.writer.flush()?;
-        let resp = RemoveResponse::deserialize(&mut self.reader)?;
-        match resp {
-            RemoveResponse::Ok(_) => Ok(()),
-            RemoveResponse::Err(msg) => Err(KvsError::StringError(msg)),
-        }
+    pub fn remove(mut self, key: String) -> impl Future<Item = Self, Error = KvsError> {
+        let tcp = self.tcp.take().unwrap();
+        let write_json = WriteJson::new(FramedWrite::new(tcp, LengthDelimitedCodec::new()));
+        let tcp = write_json
+            .send(Request::Remove { key })
+            .map(|serialized| serialized.into_inner().into_inner());
+        tcp.and_then(|tcp| {
+            let read_json = ReadJson::new(FramedRead::new(tcp, LengthDelimitedCodec::new()));
+            read_json.into_future().map_err(|(err, _)| err)
+        })
+        .map_err(|e| e.into())
+        .and_then(move |(resp, read_json)| {
+            self.tcp = Some(read_json.into_inner().into_inner());
+            match resp {
+                Some(RemoveResponse::Ok(_)) => Ok(self),
+                Some(RemoveResponse::Err(msg)) => Err(KvsError::StringError(msg)),
+                None => Err(KvsError::StringError("No response received".to_owned())),
+            }
+        })
     }
 }

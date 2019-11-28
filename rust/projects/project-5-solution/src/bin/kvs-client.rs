@@ -1,5 +1,6 @@
 use std::process::exit;
 use structopt::StructOpt;
+use tokio::prelude::*;
 
 use kvs::{KvsClient, Result};
 
@@ -17,22 +18,24 @@ fn main() {
 fn run(opts: Options) -> Result<()> {
     match opts.cmd {
         SubCommand::Get { key, addr } => {
-            let mut client = KvsClient::connect(addr)?;
+            let client = KvsClient::connect(addr);
 
-            let output = match client.get(key)? {
-                Some(value) => value,
-                None => "Key not found".to_string(),
+            let output = match client.and_then(move |client| client.get(key)).wait()? {
+                (Some(value), _) => value,
+                (None, _) => "Key not found".to_string(),
             };
 
             println!("{}", output);
         }
         SubCommand::Set { key, value, addr } => {
-            let mut client = KvsClient::connect(addr)?;
-            client.set(key, value)?;
+            let client = KvsClient::connect(addr);
+            client
+                .and_then(move |client| client.set(key, value))
+                .wait()?;
         }
         SubCommand::Rm { key, addr } => {
-            let mut client = KvsClient::connect(addr)?;
-            client.remove(key)?;
+            let client = KvsClient::connect(addr);
+            client.and_then(move |client| client.remove(key)).wait()?;
         }
     }
     Ok(())

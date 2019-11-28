@@ -1,26 +1,39 @@
-use kvs::{KvStore, KvsEngine, Result};
-use std::sync::{Arc, Barrier};
-use std::thread;
+use kvs::thread_pool::RayonThreadPool;
+use kvs::{KvStore, KvsEngine, KvsError, Result};
 use tempfile::TempDir;
+use tokio::prelude::*;
+use tokio::runtime::Runtime;
 use walkdir::WalkDir;
 
 // Should get previously stored value
 #[test]
 fn get_stored_value() -> Result<()> {
     let temp_dir = TempDir::new().expect("unable to create temporary working directory");
-    let store = KvStore::open(temp_dir.path())?;
+    let store = KvStore::<RayonThreadPool>::open(temp_dir.path(), 1)?;
 
-    store.set("key1".to_owned(), "value1".to_owned())?;
-    store.set("key2".to_owned(), "value2".to_owned())?;
+    store.set("key1".to_owned(), "value1".to_owned()).wait()?;
+    store.set("key2".to_owned(), "value2".to_owned()).wait()?;
 
-    assert_eq!(store.get("key1".to_owned())?, Some("value1".to_owned()));
-    assert_eq!(store.get("key2".to_owned())?, Some("value2".to_owned()));
+    assert_eq!(
+        store.get("key1".to_owned()).wait()?,
+        Some("value1".to_owned())
+    );
+    assert_eq!(
+        store.get("key2".to_owned()).wait()?,
+        Some("value2".to_owned())
+    );
 
     // Open from disk again and check persistent data
     drop(store);
-    let store = KvStore::open(temp_dir.path())?;
-    assert_eq!(store.get("key1".to_owned())?, Some("value1".to_owned()));
-    assert_eq!(store.get("key2".to_owned())?, Some("value2".to_owned()));
+    let store = KvStore::<RayonThreadPool>::open(temp_dir.path(), 1)?;
+    assert_eq!(
+        store.get("key1".to_owned()).wait()?,
+        Some("value1".to_owned())
+    );
+    assert_eq!(
+        store.get("key2".to_owned()).wait()?,
+        Some("value2".to_owned())
+    );
 
     Ok(())
 }
@@ -29,19 +42,31 @@ fn get_stored_value() -> Result<()> {
 #[test]
 fn overwrite_value() -> Result<()> {
     let temp_dir = TempDir::new().expect("unable to create temporary working directory");
-    let store = KvStore::open(temp_dir.path())?;
+    let store = KvStore::<RayonThreadPool>::open(temp_dir.path(), 1)?;
 
-    store.set("key1".to_owned(), "value1".to_owned())?;
-    assert_eq!(store.get("key1".to_owned())?, Some("value1".to_owned()));
-    store.set("key1".to_owned(), "value2".to_owned())?;
-    assert_eq!(store.get("key1".to_owned())?, Some("value2".to_owned()));
+    store.set("key1".to_owned(), "value1".to_owned()).wait()?;
+    assert_eq!(
+        store.get("key1".to_owned()).wait()?,
+        Some("value1".to_owned())
+    );
+    store.set("key1".to_owned(), "value2".to_owned()).wait()?;
+    assert_eq!(
+        store.get("key1".to_owned()).wait()?,
+        Some("value2".to_owned())
+    );
 
     // Open from disk again and check persistent data
     drop(store);
-    let store = KvStore::open(temp_dir.path())?;
-    assert_eq!(store.get("key1".to_owned())?, Some("value2".to_owned()));
-    store.set("key1".to_owned(), "value3".to_owned())?;
-    assert_eq!(store.get("key1".to_owned())?, Some("value3".to_owned()));
+    let store = KvStore::<RayonThreadPool>::open(temp_dir.path(), 1)?;
+    assert_eq!(
+        store.get("key1".to_owned()).wait()?,
+        Some("value2".to_owned())
+    );
+    store.set("key1".to_owned(), "value3".to_owned()).wait()?;
+    assert_eq!(
+        store.get("key1".to_owned()).wait()?,
+        Some("value3".to_owned())
+    );
 
     Ok(())
 }
@@ -50,15 +75,15 @@ fn overwrite_value() -> Result<()> {
 #[test]
 fn get_non_existent_value() -> Result<()> {
     let temp_dir = TempDir::new().expect("unable to create temporary working directory");
-    let store = KvStore::open(temp_dir.path())?;
+    let store = KvStore::<RayonThreadPool>::open(temp_dir.path(), 1)?;
 
-    store.set("key1".to_owned(), "value1".to_owned())?;
-    assert_eq!(store.get("key2".to_owned())?, None);
+    store.set("key1".to_owned(), "value1".to_owned()).wait()?;
+    assert_eq!(store.get("key2".to_owned()).wait()?, None);
 
     // Open from disk again and check persistent data
     drop(store);
-    let store = KvStore::open(temp_dir.path())?;
-    assert_eq!(store.get("key2".to_owned())?, None);
+    let store = KvStore::<RayonThreadPool>::open(temp_dir.path(), 1)?;
+    assert_eq!(store.get("key2".to_owned()).wait()?, None);
 
     Ok(())
 }
@@ -66,18 +91,18 @@ fn get_non_existent_value() -> Result<()> {
 #[test]
 fn remove_non_existent_key() -> Result<()> {
     let temp_dir = TempDir::new().expect("unable to create temporary working directory");
-    let store = KvStore::open(temp_dir.path())?;
-    assert!(store.remove("key1".to_owned()).is_err());
+    let store = KvStore::<RayonThreadPool>::open(temp_dir.path(), 1)?;
+    assert!(store.remove("key1".to_owned()).wait().is_err());
     Ok(())
 }
 
 #[test]
 fn remove_key() -> Result<()> {
     let temp_dir = TempDir::new().expect("unable to create temporary working directory");
-    let store = KvStore::open(temp_dir.path())?;
-    store.set("key1".to_owned(), "value1".to_owned())?;
-    assert!(store.remove("key1".to_owned()).is_ok());
-    assert_eq!(store.get("key1".to_owned())?, None);
+    let store = KvStore::<RayonThreadPool>::open(temp_dir.path(), 1)?;
+    store.set("key1".to_owned(), "value1".to_owned()).wait()?;
+    assert!(store.remove("key1".to_owned()).wait().is_ok());
+    assert_eq!(store.get("key1".to_owned()).wait()?, None);
     Ok(())
 }
 
@@ -86,7 +111,7 @@ fn remove_key() -> Result<()> {
 #[test]
 fn compaction() -> Result<()> {
     let temp_dir = TempDir::new().expect("unable to create temporary working directory");
-    let store = KvStore::open(temp_dir.path())?;
+    let store = KvStore::<RayonThreadPool>::open(temp_dir.path(), 1)?;
 
     let dir_size = || {
         let entries = WalkDir::new(temp_dir.path()).into_iter();
@@ -104,7 +129,7 @@ fn compaction() -> Result<()> {
         for key_id in 0..1000 {
             let key = format!("key{}", key_id);
             let value = format!("{}", iter);
-            store.set(key, value)?;
+            store.set(key, value).wait()?;
         }
 
         let new_size = dir_size();
@@ -116,10 +141,10 @@ fn compaction() -> Result<()> {
 
         drop(store);
         // reopen and check content
-        let store = KvStore::open(temp_dir.path())?;
+        let store = KvStore::<RayonThreadPool>::open(temp_dir.path(), 1)?;
         for key_id in 0..1000 {
             let key = format!("key{}", key_id);
-            assert_eq!(store.get(key)?, Some(format!("{}", iter)));
+            assert_eq!(store.get(key).wait()?, Some(format!("{}", iter)));
         }
         return Ok(());
     }
@@ -130,29 +155,29 @@ fn compaction() -> Result<()> {
 #[test]
 fn concurrent_set() -> Result<()> {
     let temp_dir = TempDir::new().expect("unable to create temporary working directory");
-    let store = KvStore::open(temp_dir.path())?;
-    let barrier = Arc::new(Barrier::new(1001));
-    for i in 0..1000 {
-        let store = store.clone();
-        let barrier = barrier.clone();
-        thread::spawn(move || {
-            store
-                .set(format!("key{}", i), format!("value{}", i))
-                .unwrap();
-            barrier.wait();
-        });
-    }
-    barrier.wait();
 
-    for i in 0..1000 {
-        assert_eq!(store.get(format!("key{}", i))?, Some(format!("value{}", i)));
-    }
+    // concurrent set in 8 threads
+    let store = KvStore::<RayonThreadPool>::open(temp_dir.path(), 8)?;
+    let runtime = Runtime::new()?;
+    let executor = runtime.executor();
+    runtime.block_on_all(future::lazy(move || {
+        for i in 0..10000 {
+            executor.spawn(
+                store
+                    .set(format!("key{}", i), format!("value{}", i))
+                    .map_err(|_| ()),
+            );
+        }
+        future::ok::<(), KvsError>(())
+    }))?;
 
-    // Open from disk again and check persistent data
-    drop(store);
-    let store = KvStore::open(temp_dir.path())?;
-    for i in 0..1000 {
-        assert_eq!(store.get(format!("key{}", i))?, Some(format!("value{}", i)));
+    // We only check concurrent set in this test, so we check sequentially here
+    let store = KvStore::<RayonThreadPool>::open(temp_dir.path(), 1)?;
+    for i in 0..10000 {
+        assert_eq!(
+            store.get(format!("key{}", i)).wait()?,
+            Some(format!("value{}", i))
+        );
     }
 
     Ok(())
@@ -161,51 +186,54 @@ fn concurrent_set() -> Result<()> {
 #[test]
 fn concurrent_get() -> Result<()> {
     let temp_dir = TempDir::new().expect("unable to create temporary working directory");
-    let store = KvStore::open(temp_dir.path())?;
+    let store = KvStore::<RayonThreadPool>::open(temp_dir.path(), 8)?;
+    // We only check concurrent get in this test, so we set sequentially here
     for i in 0..100 {
         store
             .set(format!("key{}", i), format!("value{}", i))
+            .wait()
             .unwrap();
     }
 
-    let mut handles = Vec::new();
-    for thread_id in 0..100 {
-        let store = store.clone();
-        let handle = thread::spawn(move || {
+    let runtime = Runtime::new()?;
+    let executor = runtime.executor();
+    runtime.block_on_all(future::lazy(move || {
+        for thread_id in 0..100 {
             for i in 0..100 {
                 let key_id = (i + thread_id) % 100;
-                assert_eq!(
-                    store.get(format!("key{}", key_id)).unwrap(),
-                    Some(format!("value{}", key_id))
+                executor.spawn(
+                    store
+                        .get(format!("key{}", key_id))
+                        .map(move |res| {
+                            assert_eq!(res, Some(format!("value{}", key_id)));
+                        })
+                        .map_err(|_| ()),
                 );
             }
-        });
-        handles.push(handle);
-    }
-    for handle in handles {
-        handle.join().unwrap();
-    }
+        }
+        future::ok::<(), KvsError>(())
+    }))?;
 
-    // Open from disk again and check persistent data
-    drop(store);
-    let store = KvStore::open(temp_dir.path())?;
-    let mut handles = Vec::new();
-    for thread_id in 0..100 {
-        let store = store.clone();
-        let handle = thread::spawn(move || {
+    // reload from disk and test again
+    let store = KvStore::<RayonThreadPool>::open(temp_dir.path(), 8)?;
+    let runtime = Runtime::new()?;
+    let executor = runtime.executor();
+    runtime.block_on_all(future::lazy(move || {
+        for thread_id in 0..100 {
             for i in 0..100 {
                 let key_id = (i + thread_id) % 100;
-                assert_eq!(
-                    store.get(format!("key{}", key_id)).unwrap(),
-                    Some(format!("value{}", key_id))
+                executor.spawn(
+                    store
+                        .get(format!("key{}", key_id))
+                        .map(move |res| {
+                            assert_eq!(res, Some(format!("value{}", key_id)));
+                        })
+                        .map_err(|_| ()),
                 );
             }
-        });
-        handles.push(handle);
-    }
-    for handle in handles {
-        handle.join().unwrap();
-    }
+        }
+        future::ok::<(), KvsError>(())
+    }))?;
 
     Ok(())
 }
