@@ -10,7 +10,6 @@ use log::LevelFilter;
 use structopt::clap::arg_enum;
 use structopt::StructOpt;
 
-use kvs::thread_pool::*;
 use kvs::{KvStore, KvsEngine, KvsServer, Result, SledKvsEngine};
 
 const DEFAULT_LISTENING_ADDRESS: &str = "127.0.0.1:4000";
@@ -74,13 +73,10 @@ fn run(opt: Options) -> Result<()> {
     // Write engine to file.
     fs::write(env::current_dir()?.join("engine"), format!("{}", engine))?;
 
-    let thread_pool = RayonThreadPool::new(num_cpus::get() as u32)?;
-
     match engine {
-        Engine::Kvs => run_with(KvStore::open(env::current_dir()?)?, thread_pool, opt.addr)?,
+        Engine::Kvs => run_with(KvStore::open(env::current_dir()?)?, opt.addr)?,
         Engine::Sled => run_with(
             SledKvsEngine::new(sled::Db::open(env::current_dir()?)?),
-            thread_pool,
             opt.addr,
         )?,
     }
@@ -88,14 +84,10 @@ fn run(opt: Options) -> Result<()> {
     Ok(())
 }
 
-fn run_with<E: KvsEngine, P: ThreadPool>(
-    engine: E,
-    thread_pool: P,
-    addr: SocketAddr,
-) -> Result<()> {
+fn run_with<E: KvsEngine>(engine: E, addr: SocketAddr) -> Result<()> {
     // The trait `KvsEngine` is implemented for `KvStore`. So, the trait
     // bound `KvStore: KvsEngine` is satisfied.
-    let server = KvsServer::new(engine, thread_pool);
+    let server = KvsServer::new(engine);
     server.run(addr)
 }
 

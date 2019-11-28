@@ -1,92 +1,64 @@
-use std::io::{BufReader, BufWriter, Write};
-use std::net::{TcpListener, TcpStream, ToSocketAddrs};
+use std::net::SocketAddr;
 
-use serde_json::Deserializer;
+use tokio::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::prelude::*;
+use tokio_serde_json::{ReadJson, WriteJson};
 
-use crate::common::{GetResponse, RemoveResponse, Request, SetResponse};
-use crate::thread_pool::ThreadPool;
-use crate::{KvsEngine, Result};
+use crate::common::{Request, Response};
+use crate::{KvsEngine, KvsError, Result};
 
 /// The server of a key value store.
-pub struct KvsServer<E: KvsEngine, P: ThreadPool> {
+pub struct KvsServer<E: KvsEngine> {
     engine: E,
-    thread_pool: P,
 }
 
-impl<E: KvsEngine, P: ThreadPool> KvsServer<E, P> {
+impl<E: KvsEngine> KvsServer<E> {
     /// Create a `KvsServer` with a given storage engine.
-    pub fn new(engine: E, thread_pool: P) -> Self {
-        Self {
-            engine,
-            thread_pool,
-        }
+    pub fn new(engine: E) -> Self {
+        Self { engine }
     }
 
     /// Run the server listening on the given address
-    pub fn run<A: ToSocketAddrs>(self, addr: A) -> Result<()> {
-        let listener = TcpListener::bind(addr)?;
-        for stream in listener.incoming() {
-            debug!("Connection established");
+    pub fn run(self, addr: SocketAddr) -> Result<()> {
+        let listener = TcpListener::bind(&addr)?;
 
-            let engine = self.engine.clone();
+        // Pull out a stream of sockets for incoming connections
+        let server = listener
+            .incoming()
+            .map_err(|e| error!("Unable to connect: {}", e))
+            .for_each(move |stream| {
+                debug!("Connection established");
+                let engine = self.engine.clone();
+                serve(engine, stream).map_err(|e| error!("Error on serving client: {}", e))
+            });
 
-            self.thread_pool.spawn(move || match stream {
-                Ok(stream) => {
-                    if let Err(e) = serve(engine, stream) {
-                        error!("Error on serving client: {}", e);
-                    }
-                }
-                Err(e) => error!("Unable to connect: {}", e),
-            })
-        }
+        // Start the Tokio runtime
+        tokio::run(server);
 
         Ok(())
     }
 }
 
-fn serve<E: KvsEngine>(engine: E, tcp: TcpStream) -> Result<()> {
-    let peer_addr = tcp.peer_addr()?;
-    let reader = BufReader::new(&tcp);
-    let mut writer = BufWriter::new(&tcp);
-    let req_reader = Deserializer::from_reader(reader).into_iter::<Request>();
-
-    macro_rules! send_resp {
-        ($resp:expr) => {{
-            let resp = $resp;
-            serde_json::to_writer(&mut writer, &resp)?;
-            writer.flush()?;
-            debug!("Response sent to {}: {:?}", peer_addr, resp);
-        };};
-    }
-
-    for request in req_reader {
-        let req = request?;
-        debug!("Received request from {}: {:?}", peer_addr, req);
-
-        match req {
-            Request::Set { key, value } => {
-                let engine_response = match engine.set(key, value) {
-                    Ok(_) => SetResponse::Ok(()),
-                    Err(err) => SetResponse::Err(format!("{}", err)),
-                };
-                send_resp!(engine_response);
-            }
-            Request::Get { key } => {
-                let engine_response = match engine.get(key) {
-                    Ok(value) => GetResponse::Ok(value),
-                    Err(err) => GetResponse::Err(format!("{}", err)),
-                };
-                send_resp!(engine_response);
-            }
-            Request::Remove { key } => {
-                let engine_response = match engine.remove(key) {
-                    Ok(_) => RemoveResponse::Ok(()),
-                    Err(err) => RemoveResponse::Err(format!("{}", err)),
-                };
-                send_resp!(engine_response);
-            }
-        }
-    }
-
-    Ok(())
+fn serve<E: KvsEngine>(engine: E, tcp: TcpStream) -> impl Future<Item = (), Error = KvsError> {
+    let (read_half, write_half) = tcp.split();
+    let read_json = ReadJson::new(FramedRead::new(read_half, LengthDelimitedCodec::new()));
+    let write_json = WriteJson::new(FramedWrite::new(write_half, LengthDelimitedCodec::new()));
+    write_json
+        .send_all(read_json.map(move |req| match req {
+            Request::Set { key, value } => match engine.set(key, value) {
+                Ok(_) => Response::Set,
+                Err(err) => Response::Err(format!("{}", err)),
+            },
+            Request::Get { key } => match engine.get(key) {
+                Ok(value) => Response::Get(value),
+                Err(err) => Response::Err(format!("{}", err)),
+            },
+            Request::Remove { key } => match engine.remove(key) {
+                Ok(_) => Response::Remove,
+                Err(err) => Response::Err(format!("{}", err)),
+            },
+        }))
+        .map(|_| ())
+        .map_err(|e| e.into())
 }

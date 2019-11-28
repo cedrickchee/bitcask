@@ -5,7 +5,7 @@ use tokio::net::TcpStream;
 use tokio::prelude::*;
 use tokio_serde_json::{ReadJson, WriteJson};
 
-use crate::common::{GetResponse, RemoveResponse, Request, SetResponse};
+use crate::common::{Request, Response};
 use crate::KvsError;
 
 /// The client of a key value store.
@@ -39,8 +39,9 @@ impl KvsClient {
         .and_then(move |(resp, read_json)| {
             self.tcp = Some(read_json.into_inner().into_inner());
             match resp {
-                Some(GetResponse::Ok(value)) => Ok((value, self)),
-                Some(GetResponse::Err(msg)) => Err(KvsError::StringError(msg)),
+                Some(Response::Get(value)) => Ok((value, self)),
+                Some(Response::Err(msg)) => Err(KvsError::StringError(msg)),
+                Some(_) => Err(KvsError::StringError("Invalid response".to_owned())),
                 None => Err(KvsError::StringError("No response received".to_owned())),
             }
         })
@@ -61,8 +62,9 @@ impl KvsClient {
         .and_then(move |(resp, read_json)| {
             self.tcp = Some(read_json.into_inner().into_inner());
             match resp {
-                Some(SetResponse::Ok(_)) => Ok(self),
-                Some(SetResponse::Err(msg)) => Err(KvsError::StringError(msg)),
+                Some(Response::Set) => Ok(self),
+                Some(Response::Err(msg)) => Err(KvsError::StringError(msg)),
+                Some(_) => Err(KvsError::StringError("Invalid response".to_owned())),
                 None => Err(KvsError::StringError("No response received".to_owned())),
             }
         })
@@ -83,8 +85,9 @@ impl KvsClient {
         .and_then(move |(resp, read_json)| {
             self.tcp = Some(read_json.into_inner().into_inner());
             match resp {
-                Some(RemoveResponse::Ok(_)) => Ok(self),
-                Some(RemoveResponse::Err(msg)) => Err(KvsError::StringError(msg)),
+                Some(Response::Remove) => Ok(self),
+                Some(Response::Err(msg)) => Err(KvsError::StringError(msg)),
+                Some(_) => Err(KvsError::StringError("Invalid response".to_owned())),
                 None => Err(KvsError::StringError("No response received".to_owned())),
             }
         })
