@@ -13,6 +13,7 @@ use crate::Result;
 /// created. It fails silently when any failure to create the thread at the OS level
 /// is captured after the thread pool is created. So, the thread number in the pool
 /// can decrease to zero, then spawning a task to the thread pool will panic.
+#[derive(Clone)]
 pub struct SharedQueueThreadPool {
     sender: Sender<Box<dyn FnOnce() + Send + 'static>>,
 }

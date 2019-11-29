@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Deserializer;
 
 use super::KvsEngine;
+use crate::thread_pool::ThreadPool;
 use crate::{KvsError, Result};
 
 const COMPACTION_THRESHOLD: u64 = 1024;
@@ -36,7 +37,7 @@ const COMPACTION_THRESHOLD: u64 = 1024;
 /// assert_eq!(val, Some(String::from("my_value")));
 /// ```
 #[derive(Clone)]
-pub struct KvStore {
+pub struct KvStore<P: ThreadPool> {
     /// Directory for the log and other data
     path: Arc<PathBuf>,
     /// The log reader
@@ -45,9 +46,10 @@ pub struct KvStore {
     index: Arc<SkipMap<String, CommandPos>>,
     /// The log writer
     writer: Arc<Mutex<KvStoreWriter>>,
+    thread_pool: P,
 }
 
-impl KvStore {
+impl<P: ThreadPool> KvStore<P> {
     /// Opens the store with the given path.
     ///
     /// This will create a new directory if the given one does not exist.
@@ -55,7 +57,7 @@ impl KvStore {
     /// # Errors
     ///
     /// It propagates I/O or deserialization errors during the log replay.
-    pub fn open(path: impl Into<PathBuf>) -> Result<Self> {
+    pub fn open(path: impl Into<PathBuf>, concurrency: u32) -> Result<Self> {
         let path = Arc::new(path.into());
         fs::create_dir_all(&*path)?;
 
@@ -93,16 +95,19 @@ impl KvStore {
             index: Arc::clone(&index),
         };
 
+        let thread_pool = P::new(concurrency)?;
+
         Ok(Self {
             path,
             reader,
             index,
             writer: Arc::new(Mutex::new(writer)),
+            thread_pool,
         })
     }
 }
 
-impl KvsEngine for KvStore {
+impl<P: ThreadPool> KvsEngine for KvStore<P> {
     /// Set a given key and value Strings in the store.
     ///
     /// If the key already exists, the previous value will be overwritten.

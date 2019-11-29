@@ -10,6 +10,7 @@ use log::LevelFilter;
 use structopt::clap::arg_enum;
 use structopt::StructOpt;
 
+use kvs::thread_pool::RayonThreadPool;
 use kvs::{KvStore, KvsEngine, KvsServer, Result, SledKvsEngine};
 
 const DEFAULT_LISTENING_ADDRESS: &str = "127.0.0.1:4000";
@@ -73,10 +74,18 @@ fn run(opt: Options) -> Result<()> {
     // Write engine to file.
     fs::write(env::current_dir()?.join("engine"), format!("{}", engine))?;
 
+    let concurrency = num_cpus::get() as u32;
+
     match engine {
-        Engine::Kvs => run_with(KvStore::open(env::current_dir()?)?, opt.addr)?,
+        Engine::Kvs => run_with(
+            KvStore::<RayonThreadPool>::open(env::current_dir()?, concurrency)?,
+            opt.addr,
+        )?,
         Engine::Sled => run_with(
-            SledKvsEngine::new(sled::Db::open(env::current_dir()?)?),
+            SledKvsEngine::<RayonThreadPool>::new(
+                sled::Db::open(env::current_dir()?)?,
+                concurrency,
+            )?,
             opt.addr,
         )?,
     }
