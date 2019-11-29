@@ -7,7 +7,9 @@ use criterion::{BatchSize, Criterion, ParameterizedBenchmark};
 use rand::prelude::*;
 use sled;
 use tempfile::TempDir;
+use tokio::prelude::*;
 
+use kvs::thread_pool::RayonThreadPool;
 use kvs::{KvStore, KvsEngine, SledKvsEngine};
 
 pub fn set_bench(c: &mut Criterion) {
@@ -17,12 +19,14 @@ pub fn set_bench(c: &mut Criterion) {
             b.iter_batched(
                 || {
                     let temp_dir = TempDir::new().unwrap();
-                    KvStore::open(temp_dir.path()).unwrap()
+                    let concurrency = num_cpus::get() as u32;
+                    KvStore::<RayonThreadPool>::open(temp_dir.path(), concurrency).unwrap()
                 },
                 |engine| {
                     for i in 1..(1 << 12) {
                         engine
                             .set(format!("key{}", i), "value".to_string())
+                            .wait()
                             .unwrap();
                     }
                 },
@@ -35,12 +39,18 @@ pub fn set_bench(c: &mut Criterion) {
         b.iter_batched(
             || {
                 let tmp_dir = TempDir::new().unwrap();
-                SledKvsEngine::new(sled::Db::open(tmp_dir.path()).unwrap())
+                let concurrency = num_cpus::get() as u32;
+                SledKvsEngine::<RayonThreadPool>::new(
+                    sled::Db::open(tmp_dir.path()).unwrap(),
+                    concurrency,
+                )
+                .unwrap()
             },
             |engine| {
                 for i in 1..(1 << 12) {
                     engine
                         .set(format!("key{}", i), "value".to_string())
+                        .wait()
                         .unwrap();
                 }
             },
@@ -55,16 +65,19 @@ pub fn get_bench(c: &mut Criterion) {
         "kvs",
         |b, i| {
             let temp_dir = TempDir::new().unwrap();
-            let engine = KvStore::open(temp_dir.path()).unwrap();
+            let concurrency = num_cpus::get() as u32;
+            let engine = KvStore::<RayonThreadPool>::open(temp_dir.path(), concurrency).unwrap();
             for key_i in 1..(1 << i) {
                 engine
                     .set(format!("key{}", key_i), "value".to_string())
+                    .wait()
                     .unwrap();
             }
             let mut rng = SmallRng::from_seed([0; 16]);
             b.iter(|| {
                 engine
                     .get(format!("key{}", rng.gen_range(1, 1 << i)))
+                    .wait()
                     .unwrap();
             });
         },
@@ -72,16 +85,23 @@ pub fn get_bench(c: &mut Criterion) {
     )
     .with_function("sled", |b, i| {
         let tmp_dir = TempDir::new().unwrap();
-        let engine = SledKvsEngine::new(sled::Db::open(tmp_dir.path()).unwrap());
+        let concurrency = num_cpus::get() as u32;
+        let engine = SledKvsEngine::<RayonThreadPool>::new(
+            sled::Db::open(tmp_dir.path()).unwrap(),
+            concurrency,
+        )
+        .unwrap();
         for key_i in 1..(1 << i) {
             engine
                 .set(format!("key{}", key_i), "value".to_string())
+                .wait()
                 .unwrap();
         }
         let mut rng = SmallRng::from_seed([0; 16]);
         b.iter(|| {
             engine
                 .get(format!("key{}", rng.gen_range(1, 1 << i)))
+                .wait()
                 .unwrap();
         })
     });
