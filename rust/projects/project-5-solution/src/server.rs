@@ -45,20 +45,19 @@ fn serve<E: KvsEngine>(engine: E, tcp: TcpStream) -> impl Future<Item = (), Erro
     let read_json = ReadJson::new(FramedRead::new(read_half, LengthDelimitedCodec::new()));
     let write_json = WriteJson::new(FramedWrite::new(write_half, LengthDelimitedCodec::new()));
     write_json
-        .send_all(read_json.map(move |req| match req {
-            Request::Set { key, value } => match engine.set(key, value) {
-                Ok(_) => Response::Set,
-                Err(err) => Response::Err(format!("{}", err)),
+        .sink_map_err(|e| e.into())
+        .send_all(read_json.map_err(|e| e.into()).and_then(
+            move |req| -> Box<dyn Future<Item = Response, Error = KvsError> + Send> {
+                match req {
+                    Request::Set { key, value } => {
+                        Box::new(engine.set(key, value).map(|_| Response::Set))
+                    }
+                    Request::Get { key } => Box::new(engine.get(key).map(Response::Get)),
+                    Request::Remove { key } => {
+                        Box::new(engine.remove(key).map(|_| Response::Remove))
+                    }
+                }
             },
-            Request::Get { key } => match engine.get(key) {
-                Ok(value) => Response::Get(value),
-                Err(err) => Response::Err(format!("{}", err)),
-            },
-            Request::Remove { key } => match engine.remove(key) {
-                Ok(_) => Response::Remove,
-                Err(err) => Response::Err(format!("{}", err)),
-            },
-        }))
+        ))
         .map(|_| ())
-        .map_err(|e| e.into())
 }

@@ -1,4 +1,6 @@
-use sled::{Db, Tree};
+use sled::Db;
+use tokio::prelude::*;
+use tokio::sync::oneshot;
 
 use super::KvsEngine;
 use crate::thread_pool::ThreadPool;
@@ -23,26 +25,66 @@ impl<P: ThreadPool> SledKvsEngine<P> {
 }
 
 impl<P: ThreadPool> KvsEngine for SledKvsEngine<P> {
-    fn set(&self, key: String, value: String) -> Result<()> {
-        let tree: &Tree = &self.db;
-        Ok(tree.insert(key, value.into_bytes()).map(|_| ())?)
+    fn set(
+        &self,
+        key: String,
+        value: String,
+    ) -> Box<dyn Future<Item = (), Error = KvsError> + Send> {
+        let db = self.db.clone();
+        let (tx, rx) = oneshot::channel();
+        self.thread_pool.spawn(move || {
+            let res = db
+                .insert(key, value.into_bytes())
+                .and_then(|_| db.flush())
+                .map(|_| ())
+                .map_err(KvsError::from);
+            if tx.send(res).is_err() {
+                error!("Receiving end is dropped");
+            }
+        });
+        Box::new(
+            rx.map_err(|e| KvsError::StringError(format!("{}", e)))
+                .flatten(),
+        )
     }
 
-    fn get(&self, key: String) -> Result<Option<String>> {
-        let tree: &Tree = &self.db;
-
-        Ok(tree
-            .get(key)?
-            .map(|i_vec| AsRef::<[u8]>::as_ref(&i_vec).to_vec())
-            .map(String::from_utf8)
-            .transpose()?)
+    fn get(&self, key: String) -> Box<dyn Future<Item = Option<String>, Error = KvsError> + Send> {
+        let db = self.db.clone();
+        let (tx, rx) = oneshot::channel();
+        self.thread_pool.spawn(move || {
+            let res = (move || {
+                Ok(db
+                    .get(key)?
+                    .map(|i_vec| AsRef::<[u8]>::as_ref(&i_vec).to_vec())
+                    .map(String::from_utf8)
+                    .transpose()?)
+            })();
+            if tx.send(res).is_err() {
+                error!("Receiving end is dropped");
+            }
+        });
+        Box::new(
+            rx.map_err(|e| KvsError::StringError(format!("{}", e)))
+                .flatten(),
+        )
     }
 
-    fn remove(&self, key: String) -> Result<()> {
-        let tree: &Tree = &self.db;
-        tree.remove(key)?.ok_or(KvsError::KeyNotFound)?;
-        tree.flush()?;
-
-        Ok(())
+    fn remove(&self, key: String) -> Box<dyn Future<Item = (), Error = KvsError> + Send> {
+        let db = self.db.clone();
+        let (tx, rx) = oneshot::channel();
+        self.thread_pool.spawn(move || {
+            let res = (move || {
+                db.remove(key)?.ok_or(KvsError::KeyNotFound)?;
+                db.flush()?;
+                Ok(())
+            })();
+            if tx.send(res).is_err() {
+                error!("Receiving end is dropped");
+            }
+        });
+        Box::new(
+            rx.map_err(|e| KvsError::StringError(format!("{}", e)))
+                .flatten(),
+        )
     }
 }
