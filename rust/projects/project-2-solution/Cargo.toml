@@ -1,0 +1,26 @@
+[package]
+name = "kvs"
+version = "0.1.0"
+authors = ["Cedric Chee <cedric@invictusbyte.com>"]
+description = "A key-value store"
+edition = "2018"
+
+[dependencies]
+structopt = "0.3"
+failure = "0.1.6"
+serde = { version = "1.0.89", features = ["derive"] }
+serde_json = "1.0.39"
+
+[dev-dependencies]
+assert_cmd = "0.11.0"
+predicates = "1.0.0"
+tempfile = "3.0.7"
+walkdir = "2.2.7"
+
+[lib]
+test = false
+doctest = false
+
+[[bin]]
+name = "kvs"
+test = false

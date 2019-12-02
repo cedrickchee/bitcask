@@ -1,0 +1,17 @@
+[package]
+name = "bb-2-2-exercise"
+version = "0.1.0"
+authors = ["cedrickchee <cedrick.chee@gmail.com>"]
+edition = "2018"
+repository = "https://github.com/cedrickchee/practical-rust"
+description = "Building Blocks 2 (serialize/deserialize RON) exercise for PingCap's Practical Networked Applications in Rust course"
+license = "MIT"
+readme = "README.md"
+keywords = ["rust", "distributed-systems", "networked-app", "project", "educational"]
+categories = ["command-line-utilities", "database-implementations"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+ron = "0.5.1"
+serde = "1.0.102"
